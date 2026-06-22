@@ -1,0 +1,43 @@
+# Test-family isolation suite runner (PowerShell) - Windows-native equivalent of
+# run_test_family.sh. Brings up the local Supabase stack, resets to a virgin DB (applies
+# migrations 0001-0011), reads DB_URL from 'supabase status' (never printed), and pipes
+# test_family.test.sql into Postgres with ON_ERROR_STOP. Prefers a local psql; falls back to
+# the supabase_db Docker container. Prereqs: Docker, Supabase CLI (+ optionally psql).
+# Usage:  ./supabase/tests/run_test_family.ps1
+$ErrorActionPreference = 'Stop'
+
+$RepoRoot = (Resolve-Path "$PSScriptRoot/../..").Path
+Set-Location $RepoRoot
+$Suite = "supabase/tests/test_family.test.sql"
+if (-not (Test-Path $Suite)) { Write-Error "Suite not found: $Suite" }
+
+foreach ($tool in 'supabase','docker') {
+  if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+    Write-Error "$tool not found on PATH. Install it, reopen the terminal, and retry."
+  }
+}
+
+Write-Host "==> Starting local Supabase stack (idempotent)..."
+supabase start | Out-Host
+
+Write-Host "==> Resetting to a virgin DB (applies migrations 0001-0011)..."
+supabase db reset | Out-Host
+
+Write-Host "==> Reading DB_URL from 'supabase status'..."
+$statusEnv = supabase status -o env
+$m = $statusEnv | Select-String '^DB_URL="(.*)"$'
+if (-not $m) { Write-Error "Could not read DB_URL from 'supabase status -o env' - is the stack running?" }
+$DbUrl = $m.Matches[0].Groups[1].Value
+
+if (Get-Command psql -ErrorAction SilentlyContinue) {
+  Write-Host "==> Running test-family suite via local psql..."
+  psql $DbUrl -v ON_ERROR_STOP=1 -q -f $Suite
+} else {
+  Write-Host "==> No local psql; running test-family suite via the db container..."
+  $Container = (docker ps --filter "name=supabase_db" --format "{{.Names}}" | Select-Object -First 1)
+  if (-not $Container) { Write-Error "Could not find a supabase_db container." }
+  Get-Content $Suite | docker exec -i $Container psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q
+}
+
+if ($LASTEXITCODE -ne 0) { Write-Error "Test-family isolation suite FAILED (psql exit $LASTEXITCODE)." }
+Write-Host "==> Test-family isolation suite PASSED."

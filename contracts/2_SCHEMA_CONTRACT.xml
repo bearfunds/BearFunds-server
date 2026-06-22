@@ -1,16 +1,19 @@
 <!--
-  Canonical: BearFunds-server · v1.11
+  Canonical: BearFunds-server · v1.12
   This repo is the canonical home for the shared client<->server Schema Contract
   (re-home decided in the brain's Sources of Truth, 2026-06-01; executed 2026-06-02).
   It is NOT casually editable. Any change is a deliberate version bump with a one-line
   rationale; the operator drops the versioned copy into the client (downstream consumer).
-  v1.11 (additive, non-breaking): MEMBERS gains google_avatar - a server-managed, read-only column holding the Google sign-in photo, separated from the user-set 'avatar' (now custom-only). Render precedence custom -> google -> initials, so the Google photo is a default that never overwrites a custom avatar. Written by handle_new_user; never accepted on writes (not in the API WRITABLE set). Existing clients ignore the new column. 
--->
-<SchemaContract version="1.11">
+  v1.12 (non-breaking, server-internal; wire shape unchanged): the existing `isTest` request
+  flag now also scopes reads/writes/wipe to a dedicated per-user TEST family (server-derived
+  from auth.uid()), isolating test-mode data from real data on the shared database. Clients keep
+  sending `isTest` with no change; no field/action/envelope change. Implemented server-side via a
+  request-header-aware auth_family_id() (migration 0011).-->
+<SchemaContract version="1.12">
   <Meta>
     <Description>Immutable Source of Truth for Backend API and Database Schema</Description>
     <Usage>Paste this into the AI Context before generating any API or Data Fetching code.</Usage>
-    <Canonical>BearFunds-server · v1.11</Canonical>
+    <Canonical>BearFunds-server · v1.12</Canonical>
   </Meta>
 
   <Protocol>
