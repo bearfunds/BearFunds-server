@@ -24,6 +24,7 @@ Before writing any code, output a section titled `## Impact Analysis`:
 3. **Tenancy & Auth Check:** Confirm `family_id` is server-derived, that RLS policies cover the touched tables, and that nothing trusts a client-supplied tenant key. Name the brain behaviour guards: **QA Area 008 (Identity)** and **Area 019 (Isolation)**.
 4. **Risk:** List other tables/endpoints/policies that might be affected, and any data-loss or migration risk.
 5. **Test Plan:** Count existing tests for the area. State which RLS-isolation and Edge-Function-action tests you will add. If the change would weaken isolation or contradict the Schema Contract, STOP and warn me immediately.
+  - **Coverage opportunity:** Name the test(s) this change will add or extend (a bug fix names the regression test that would have caught it; a tenant-table change names the RLS-isolation test). If none is warranted, say why.
 
 ## Step 2: Planning & Approval Lock
 1. **Describe Planned Changes:** High level, where and what changes. One short paragraph per change (≤ ~300 chars); bullet if needed.
@@ -41,6 +42,7 @@ Before writing any code, output a section titled `## Impact Analysis`:
 1. **Test Validation:** Output the new test count and confirm isolation tests pass.
 2. **Contract Confirmation:** Confirm the change complies with `2_SCHEMA_CONTRACT.xml` (or names the approved bump).
 3. **Tenancy Confirmation:** Explicitly confirm RLS is enabled on touched tables and `family_id` is server-derived.
+4. **Coverage Ratchet:** State the coverage delta. If this fixed a bug, confirm a regression test was added that fails on the old behaviour and passes now (name it). If it added or changed a feature, contract, or tenancy behaviour, confirm a new or extended test covers it (including an RLS-isolation test for any tenant-table change). If no test was warranted, give the one-line reason. (Brain CLAUDE.md "Coverage ratchet", v1.8.)
 
 # 4. State Machine Definition: Approval Lock
 - **Lock Engagement:** Immediately after presenting `## Impact Analysis` and the Planning & Approval Lock sections, you enter a locked state.
