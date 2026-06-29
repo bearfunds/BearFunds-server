@@ -2,12 +2,12 @@
 
 Entry point for any Claude Code session in this repo. This file is a **thin loader**: it points at the canonical sources of truth rather than restating them, so there is exactly one authoritative copy of each. Read the chain below before doing any work.
 
-This is the **server** of BearFunds ("Sweet Savings For Families") — the backend that introduces real authentication, multi-family tenancy, and server-side secrets. The **client repo** (React 19 + TS + Vite, offline-first) lives separately at `D:\Projects\github\BearFunds-client`; a **brain vault** at `D:\Projects\Brains\BearFunds` holds the decisions and synthesis. This repo is **newly created and not yet scaffolded** beyond these governance files — the design it implements is the brain's [[BearFunds Server Architecture]] (Q6).
+This is the **server** of BearFunds ("Sweet Savings For Families") — the backend that introduces real authentication, multi-family tenancy, and server-side secrets. The **client repo** (React 19 + TS + Vite, offline-first) lives separately at `D:\Projects\github\BearFunds-client`; a **brain vault** at `D:\Projects\Brains\BearFunds` holds the decisions and synthesis. This repo is **scaffolded and DEPLOYED** (live since 2026-06-17): a Supabase project under `supabase/` (migrations 0001-0012 + RLS policies + the `api` data Edge Function and the `parse-receipt` AI Edge Function) plus `contracts/` (the canonical Schema Contract). The design it implements is the brain's [[BearFunds Server Architecture]] (Q6).
 
 ## Read these first (in order)
 
 1. **`0_AI_INSTRUCTIONS.md`** — the engineering protocol. The canonical working discipline (Impact Analysis → Approval Lock → Test-first → Verify), adapted for server work (contract bumps, tenancy, RLS). Read it fully and follow it exactly. It is authoritative over this file if they ever disagree.
-2. **`2_SCHEMA_CONTRACT.xml`** — the backend API + DB contract (v1.5.0). **This repo is its canonical home** (the producer owns the interface; decided in the brain's Sources of Truth, 2026-06-01). It is a *shared* client↔server interface, so changes are deliberate version bumps that the operator drops into the client — never casual edits. **Pending:** the canonical copy must be dropped in from the client with a `Canonical: <this repo> · vX.Y` header line (see "Setup TODO" below).
+2. **`2_SCHEMA_CONTRACT.xml`** — the backend API + DB contract (v1.13). **This repo is its canonical home** (the producer owns the interface; decided in the brain's Sources of Truth, 2026-06-01). It is a *shared* client↔server interface, so changes are deliberate version bumps that the operator drops into the client — never casual edits. The canonical copy carries a `Canonical: BearFunds-server · vX.Y` header line; the client keeps a downstream drop-in.
 
 ## The working loop (summary — `0_AI_INSTRUCTIONS.md` is canonical)
 
@@ -15,13 +15,13 @@ This is the **server** of BearFunds ("Sweet Savings For Families") — the backe
 - Then present the plan and **enter the Approval Lock** — end with exactly: `Awaiting approval. Please use an approval keyword to proceed.` Generate no code until an approval keyword arrives. **Never simulate a user approval.**
 - On approval: write tests first (incl. isolation tests), then the implementation, then remove dead code. Verify against the contract and the tenancy invariants.
 
-## Architecture orientation (target — see the brain for the full design)
+## Architecture orientation (DEPLOYED — see the brain for the full design)
 
 - **Platform:** Supabase — managed **Postgres** (datastore), **Auth** (Google sign-in), and **Edge Functions** (the API seam).
-- **API seam:** a single Edge Function that **honors the v1.5.x Schema Contract** — one POST endpoint, action-based (`read`/`batchCreate`/`batchUpdate`/`batchUpsert`/`wipe`), snake_case logical keys, `{ status, data }` envelope. This keeps the client's `core/api/` layer almost unchanged (it swaps the shared bundle key for a Supabase session JWT).
-- **Datastore:** one table per client collection (`transactions`, `categories`, `wallets`, `entities`, `members`) + a `families` tenancy root, mapping the brain's `Syncable` model 1:1, with server-managed `updated_at`, soft-delete `deleted`, and `is_immutable`.
-- **Tenancy/auth:** every tenant row carries a server-derived `family_id`, enforced by Postgres **RLS**; `FamilyMember.role` (`admin`/`member`) becomes server-enforced. Secrets (Gemini, JWT) live server-side, never in the client bundle.
-- A RESTful **v2** contract is deferred future work; honor v1.5.x now.
+- **API seam:** a single Edge Function that **honors the v1.13 Schema Contract** — one POST endpoint, action-based (`read`/`batchCreate`/`batchUpdate`/`batchUpsert`/`wipe`/`version`), snake_case logical keys, `{ status, data }` envelope. This keeps the client's `core/api/` layer almost unchanged (it swaps the shared bundle key for a Supabase session JWT).
+- **Datastore:** one table per client collection (`transactions`, `categories`, `subcategories`, `wallets`, `entities`, `members`, `staged_transactions`) + a `families` tenancy root, mapping the brain's `Syncable` model 1:1, with server-managed `updated_at`, soft-delete `deleted`, and `is_immutable`.
+- **Tenancy/auth:** every tenant row carries a server-derived `family_id`, enforced by Postgres **RLS**; `FamilyMember.role` (`admin`/`member`) is server-enforced. Secrets (Gemini, JWT) live server-side, never in the client bundle.
+- A RESTful **v2** contract is deferred future work; honor v1.13 now.
 
 ## Critical guardrails
 
@@ -42,12 +42,9 @@ Brain Reference docs (under `Areas/BearFunds/`):
 - `Reference/BearFunds Schema Contract.md`, `Reference/BearFunds Data Model.md`, `Reference/BearFunds Persistence and Sync.md` — the contract map, the `Syncable` model, and the client's sync layer this server must interoperate with.
 - `Sources of Truth.md` (governance + the Schema Contract re-home), `Migration Playbook.md` (esp. L2 auth, L4 server-authoritative sync), `Open Questions.md` (Q1 secrets, Q3 Sheets, Q7 role-enum).
 
-## Setup TODO (before real code)
+## Setup (done - kept for history)
 
-1. Drop in the canonical `2_SCHEMA_CONTRACT.xml` from the client, add the `Canonical: <this repo> · v1.5.0` header line, and update the client's copy to note it is now a downstream drop-in.
-2. Scaffold the Supabase project layout: `supabase/` (migrations + RLS policies + Edge Functions) and `contracts/` (the canonical contract), with tests for action handlers and RLS isolation.
-
-Both steps go through the `0_AI_INSTRUCTIONS.md` protocol (Impact Analysis → Approval) before code.
+Both initial-setup steps are complete: (1) the canonical `2_SCHEMA_CONTRACT.xml` is re-homed here with the `Canonical: BearFunds-server` header (now v1.13) and the client holds a downstream drop-in; (2) the Supabase layout is scaffolded and deployed - `supabase/` (migrations 0001-0012 + RLS + the `api` and `parse-receipt` Edge Functions) and `contracts/`, with action-handler + RLS-isolation tests. New work goes through the `0_AI_INSTRUCTIONS.md` protocol (Impact Analysis -> Approval) as usual.
 
 
 ## Tool reliability (file writes)
