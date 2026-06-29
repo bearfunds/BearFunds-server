@@ -55,7 +55,7 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
 };
 
 export const ACTIONS = new Set([
-  "read", "batchCreate", "batchUpdate", "batchUpsert", "wipe",
+  "read", "batchCreate", "batchUpdate", "batchUpsert", "wipe", "version",
 ]);
 
 export function isLogicalTable(t: unknown): t is LogicalTable {

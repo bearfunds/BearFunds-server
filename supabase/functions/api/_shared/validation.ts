@@ -28,7 +28,11 @@ export interface WipeRequest {
   action: "wipe";
   table: LogicalTable;
 }
-export type ApiRequest = ReadRequest | RowsRequest | UpdatesRequest | WipeRequest;
+// Family-scoped sync probe: no table, no rows. Returns the family high-water mark.
+export interface VersionRequest {
+  action: "version";
+}
+export type ApiRequest = ReadRequest | RowsRequest | UpdatesRequest | WipeRequest | VersionRequest;
 
 function requireObject(v: unknown): Record<string, unknown> {
   if (v === null || typeof v !== "object" || Array.isArray(v)) {
@@ -66,6 +70,9 @@ export function parseRequest(body: unknown): ApiRequest {
   if (typeof action !== "string" || !ACTIONS.has(action)) {
     throw new ValidationError(`Unknown or missing action.`);
   }
+  // version is family-scoped: it carries no table/rows, so it is validated before the
+  // table check (the only action for which table is not required).
+  if (action === "version") return { action: "version" };
   if (!isLogicalTable(table)) {
     throw new ValidationError(`Unknown or missing table.`);
   }

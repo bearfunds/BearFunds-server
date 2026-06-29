@@ -360,6 +360,32 @@ do $t$ begin
   assert (select name from public.categories where id='c001' and family_id=(select family_id from fam where who='B')) = 'Bob Food', 'Bob c001 distinct from Alice';
 end $t$;
 
+-- ============ family_version(): family-scoped sync high-water mark (v1.13) ============
+-- The `version` action returns max(updated_at) across the caller's tenant tables. The suite
+-- runs in ONE transaction, so now() (and every trigger-set updated_at) is frozen -- which
+-- would make Alice's and Bob's versions identical. To prove ISOLATION, forge a single
+-- far-future updated_at on Alice's wallet with the updated_at trigger disabled
+-- (session_replication_role=replica, superuser), then assert only Alice's version reflects it.
+set session_replication_role = replica;
+update public.wallets set updated_at = '2099-01-01T00:00:00Z' where id = 'w_a1';
+set session_replication_role = origin;
+
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+do $t$ begin
+  assert public.family_version() is not null, 'Alice version is non-null (she has rows)';
+  assert public.family_version() = '2099-01-01T00:00:00Z'::timestamptz,
+         'Alice version reflects her newest (forged-future) row';
+end $t$;
+reset role; reset request.jwt.claims;
+
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert public.family_version() is not null, 'Bob version is non-null (he has rows)';
+  assert public.family_version() < '2099-01-01T00:00:00Z'::timestamptz,
+         'Bob version does NOT see Alice future row (per-family isolation)';
+end $t$;
+reset role; reset request.jwt.claims;
+
 rollback;
 \echo '================================'
 \echo 'RLS ISOLATION TESTS: ALL PASSED'

@@ -13,6 +13,7 @@ function fakeDb() {
     update: (t, id, ch) => { calls.push({ op: "update", table: t, arg: { id, ch } }); return Promise.resolve([{ id, ...ch }]); },
     upsert: (t, rows) => { calls.push({ op: "upsert", table: t, arg: rows }); return Promise.resolve(rows); },
     wipe: (t) => { calls.push({ op: "wipe", table: t, arg: null }); return Promise.resolve(3); },
+    version: () => { calls.push({ op: "version", table: "", arg: null }); return Promise.resolve({ version: "2026-01-01T00:00:00.000Z" }); },
   };
   return { db, calls };
 }
@@ -113,4 +114,18 @@ Deno.test("STAGED_TRANSACTIONS: rejects unknown row key and read maps logical->p
   const { db, calls } = fakeDb();
   await runAction(parseRequest({ action: "read", table: "STAGED_TRANSACTIONS" }), db, { isTest: false });
   assertEquals(calls[0].table, "staged_transactions");
+});
+
+Deno.test("version: table-less action routes to db.version()", async () => {
+  const { db, calls } = fakeDb();
+  const out = await runAction(parseRequest({ action: "version" }), db, { isTest: false });
+  assertEquals(calls[0].op, "version");
+  assertEquals(out, { version: "2026-01-01T00:00:00.000Z" });
+});
+
+Deno.test("version: parses with no table; a stray table is ignored", () => {
+  const a = parseRequest({ action: "version" });
+  assert(a.action === "version");
+  const b = parseRequest({ action: "version", table: "TRANSACTIONS" });
+  assert(b.action === "version");
 });

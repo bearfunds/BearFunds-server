@@ -12,6 +12,8 @@ export interface DbExecutor {
   update(physicalTable: string, id: string, changed: Record<string, unknown>): Promise<unknown[]>;
   upsert(physicalTable: string, rows: Record<string, unknown>[]): Promise<unknown[]>;
   wipe(physicalTable: string): Promise<number>;
+  // Family-scoped high-water mark (max updated_at across tenant tables), or null when empty.
+  version(): Promise<{ version: string | null }>;
 }
 
 export interface ActionContext {
@@ -23,6 +25,11 @@ export async function runAction(
   db: DbExecutor,
   ctx: ActionContext,
 ): Promise<unknown> {
+  // version is table-less: handle it before resolving a physical table.
+  if (req.action === "version") {
+    return await db.version();
+  }
+
   const physical = PHYSICAL[req.table];
 
   switch (req.action) {

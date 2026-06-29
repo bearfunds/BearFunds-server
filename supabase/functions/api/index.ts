@@ -34,6 +34,13 @@ function makeExecutor(supabase: SupabaseClient): DbExecutor {
       if (error) fail(error);
       return data ?? [];
     },
+    async version() {
+      // family_version() (migration 0012) returns the family high-water mark, RLS/auth_family_id
+      // scoped (test-aware via 0011), as a single timestamptz (null when the family has no rows).
+      const { data, error } = await supabase.rpc("family_version");
+      if (error) fail(error);
+      return { version: (data as string | null) ?? null };
+    },
     async wipe(table) {
       let q = supabase.from(table).delete({ count: "exact" }).neq("id", "__never_matches__");
       // Never delete account-linking members (user_id set): that row establishes the

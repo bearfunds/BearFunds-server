@@ -1,19 +1,17 @@
 <!--
-  Canonical: BearFunds-server · v1.12
+  Canonical: BearFunds-server · v1.13
   This repo is the canonical home for the shared client<->server Schema Contract
   (re-home decided in the brain's Sources of Truth, 2026-06-01; executed 2026-06-02).
   It is NOT casually editable. Any change is a deliberate version bump with a one-line
   rationale; the operator drops the versioned copy into the client (downstream consumer).
-  v1.12 (non-breaking, server-internal; wire shape unchanged): the existing `isTest` request
-  flag now also scopes reads/writes/wipe to a dedicated per-user TEST family (server-derived
-  from auth.uid()), isolating test-mode data from real data on the shared database. Clients keep
-  sending `isTest` with no change; no field/action/envelope change. Implemented server-side via a
-  request-header-aware auth_family_id() (migration 0011).-->
-<SchemaContract version="1.12">
+  v1.13 (additive, non-breaking): new family-scoped `version` action returns the family
+  high-water mark (max updated_at across tenant tables) so the client can ping for changes on
+  app open without a full sync. No change to existing actions, fields, or envelope.-->
+<SchemaContract version="1.13">
   <Meta>
     <Description>Immutable Source of Truth for Backend API and Database Schema</Description>
     <Usage>Paste this into the AI Context before generating any API or Data Fetching code.</Usage>
-    <Canonical>BearFunds-server · v1.12</Canonical>
+    <Canonical>BearFunds-server · v1.13</Canonical>
   </Meta>
 
   <Protocol>
@@ -75,6 +73,15 @@
       <Example>
         <![CDATA[
         { "action": "wipe", "table": "TRANSACTIONS" }
+        ]]>
+      </Example>
+    </Action>
+    <Action name="version">
+      <Description>Lightweight sync probe. Family-scoped; takes no table and no rows. Returns the family high-water mark = max(updated_at) across all tenant tables (or null when the family has no rows), so the client can check on app open whether anything changed since its last sync WITHOUT pulling every collection.</Description>
+      <Example>
+        <![CDATA[
+        Request:  { "action": "version" }
+        Response: { "status": "success", "data": { "version": "2026-06-29T10:15:00.000Z" } }
         ]]>
       </Example>
     </Action>
