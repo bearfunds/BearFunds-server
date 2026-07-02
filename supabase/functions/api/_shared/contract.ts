@@ -1,6 +1,10 @@
-// Schema Contract v1.12 - the single source of allowed tables, logical->physical
+// Schema Contract v1.14 - the single source of allowed tables, logical->physical
 // table mapping, and per-table writable column allowlists (snake_case logical keys).
 // Keys the client must never set (tenancy/sync-internal) are stripped, not errored.
+// v1.14 (RLE): sensitive fields ride an opaque client-encrypted `enc` envelope on
+// TRANSACTIONS / WALLETS / ENTITIES / STAGED_TRANSACTIONS; their plaintext keys are
+// REMOVED from the allowlists so the server rejects any plaintext write (enforced,
+// not conventional). Categories/subcategories/members stay plaintext by design.
 
 export type LogicalTable =
   | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "WALLETS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS";
@@ -27,8 +31,8 @@ const GLOBAL_WRITABLE = ["id", "deleted", "is_immutable"];
 export const WRITABLE: Record<LogicalTable, Set<string>> = {
   TRANSACTIONS: new Set([
     ...GLOBAL_WRITABLE,
-    "date", "amount", "currency", "type", "category_id", "sub_category_id",
-    "entity_id", "wallet_id", "member_id", "description", "tags", "status",
+    "date", "currency", "type", "category_id", "sub_category_id",
+    "entity_id", "wallet_id", "member_id", "status", "enc",
   ]),
   CATEGORIES: new Set([
     ...GLOBAL_WRITABLE, "name", "type", "icon", "color", "description",
@@ -37,20 +41,19 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
     ...GLOBAL_WRITABLE, "category_id", "name", "is_default",
   ]),
   WALLETS: new Set([
-    ...GLOBAL_WRITABLE, "name", "currency", "icon", "color", "description", "is_default",
+    ...GLOBAL_WRITABLE, "currency", "icon", "color", "is_default", "enc",
   ]),
   ENTITIES: new Set([
-    ...GLOBAL_WRITABLE, "name", "aliases", "match_patterns",
-    "default_category_id", "default_sub_category_id", "icon", "color",
+    ...GLOBAL_WRITABLE,
+    "default_category_id", "default_sub_category_id", "icon", "color", "enc",
   ]),
   MEMBERS: new Set([
     ...GLOBAL_WRITABLE, "name", "role", "avatar", "color",
   ]),
   STAGED_TRANSACTIONS: new Set([
     ...GLOBAL_WRITABLE,
-    "batch_id", "date", "amount", "currency", "type", "category_id", "sub_category_id",
-    "entity_id", "wallet_id", "member_id", "description", "tags", "status",
-    "source_wallet", "source_category", "source_name", "source_row",
+    "batch_id", "date", "currency", "type", "category_id", "sub_category_id",
+    "entity_id", "wallet_id", "member_id", "status", "enc",
   ]),
 };
 

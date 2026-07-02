@@ -98,7 +98,7 @@ Deno.test("server E2E — v1.6.0 contract + cross-family isolation", async (t) =
   });
 
   await t.step("A: batchCreate -> success, family_id server-derived", async () => {
-    const r = await api(aliceJwt, { action: "batchCreate", table: "WALLETS", rows: [{ id: wA, name: "Alice EUR", currency: "EUR" }] });
+    const r = await api(aliceJwt, { action: "batchCreate", table: "WALLETS", rows: [{ id: wA, enc: "v1.iv_wA.ct_alice_eur", currency: "EUR" }] });
     assertEquals(r.status, "success");
     const created = rows(r)[0];
     assertEquals(created.id, wA);
@@ -113,12 +113,12 @@ Deno.test("server E2E — v1.6.0 contract + cross-family isolation", async (t) =
   });
 
   await t.step("A: batchUpdate then batchUpsert succeed", async () => {
-    const up = await api(aliceJwt, { action: "batchUpdate", table: "WALLETS", updates: [{ id: wA, name: "Alice EUR v2" }] });
+    const up = await api(aliceJwt, { action: "batchUpdate", table: "WALLETS", updates: [{ id: wA, enc: "v1.iv_wA.ct_v2" }] });
     assertEquals(up.status, "success");
-    assertEquals((rows(up)[0] as Record<string, unknown>).name, "Alice EUR v2");
-    const us = await api(aliceJwt, { action: "batchUpsert", table: "WALLETS", rows: [{ id: wA, name: "Alice EUR v3", currency: "EUR" }] });
+    assertEquals((rows(up)[0] as Record<string, unknown>).enc, "v1.iv_wA.ct_v2");
+    const us = await api(aliceJwt, { action: "batchUpsert", table: "WALLETS", rows: [{ id: wA, enc: "v1.iv_wA.ct_v3", currency: "EUR" }] });
     assertEquals(us.status, "success");
-    assertEquals((rows(us)[0] as Record<string, unknown>).name, "Alice EUR v3");
+    assertEquals((rows(us)[0] as Record<string, unknown>).enc, "v1.iv_wA.ct_v3");
   });
 
   await t.step("B: cannot READ A's wallet (isolation)", async () => {
@@ -128,13 +128,13 @@ Deno.test("server E2E — v1.6.0 contract + cross-family isolation", async (t) =
   });
 
   await t.step("B: UPDATE of A's wallet is a no-op (invisible row)", async () => {
-    const r = await api(bobJwt, { action: "batchUpdate", table: "WALLETS", updates: [{ id: wA, name: "HACKED" }] });
+    const r = await api(bobJwt, { action: "batchUpdate", table: "WALLETS", updates: [{ id: wA, enc: "HACKED" }] });
     assertEquals(r.status, "success");
     assertEquals(rows(r).length, 0, "Bob's cross-family update must affect zero rows");
   });
 
   await t.step("B: forged family_id is overwritten to Bob's family", async () => {
-    const r = await api(bobJwt, { action: "batchCreate", table: "WALLETS", rows: [{ id: wForge, name: "forged", currency: "USD", family_id: aliceFamily }] });
+    const r = await api(bobJwt, { action: "batchCreate", table: "WALLETS", rows: [{ id: wForge, enc: "v1.iv_forge.ct", currency: "USD", family_id: aliceFamily }] });
     assertEquals(r.status, "success");
     const created = rows(r)[0] as Record<string, unknown>;
     assert(created.family_id !== aliceFamily, "forged family_id must not land in Alice's family");
@@ -143,7 +143,7 @@ Deno.test("server E2E — v1.6.0 contract + cross-family isolation", async (t) =
   await t.step("A: wallet survived Bob untouched", async () => {
     const r = await api(aliceJwt, { action: "read", table: "WALLETS", since: "1970-01-01T00:00:00Z" });
     const mine = rows(r).find((w) => w.id === wA) as Record<string, unknown> | undefined;
-    assertEquals(mine?.name, "Alice EUR v3", "Alice's wallet name must be unchanged by Bob");
+    assertEquals(mine?.enc, "v1.iv_wA.ct_v3", "Alice's wallet enc must be unchanged by Bob");
     assert(!rows(r).some((w) => w.id === wForge), "Alice must not see Bob's forged wallet");
   });
 
@@ -183,19 +183,26 @@ Deno.test("server E2E — v1.6.0 contract + cross-family isolation", async (t) =
     assertEquals(c.status, "success");
   });
 
-  await t.step("STAGED: A creates a partially-mapped staged row (raw amount, null FKs)", async () => {
+  await t.step("STAGED: A creates a partially-mapped staged row (enc envelope, null FKs)", async () => {
+    // v1.14 RLE: raw amount / source name / source row ride the opaque enc envelope.
+    const encStA = `v1.iv_${RUN}.ct_acme_row`;
     const r = await api(aliceJwt, {
       action: "batchCreate", table: "STAGED_TRANSACTIONS",
-      rows: [{
-        id: stA, batch_id: `b_${RUN}`, amount: "-1.234,56", source_name: "ACME / GMBH",
-        source_row: JSON.stringify({ Memo: "ACME / GMBH", Value: "-1.234,56" }),
-      }],
+      rows: [{ id: stA, batch_id: `b_${RUN}`, enc: encStA }],
     });
     assertEquals(r.status, "success");
     const created = rows(r)[0] as Record<string, unknown>;
-    assertEquals(created.amount, "-1.234,56", "raw amount text persists verbatim (not numeric)");
+    assertEquals(created.enc, encStA, "opaque enc envelope persists verbatim (server never reads it)");
     assertEquals(created.category_id, null, "an unmapped FK stays null while staged");
     assert(created.family_id, "family_id is server-derived onto the staged row");
+  });
+
+  await t.step("RLE: plaintext sensitive keys are rejected on the wire", async () => {
+    const r = await api(aliceJwt, {
+      action: "batchUpsert", table: "TRANSACTIONS",
+      rows: [{ id: `t_plain_${RUN}`, amount: 5 }],
+    });
+    assertEquals(r.status, "error", "plaintext amount must be rejected (unknown key)");
   });
 
   await t.step("STAGED: B cannot read A's staged rows (isolation)", async () => {
@@ -208,7 +215,7 @@ Deno.test("server E2E — v1.6.0 contract + cross-family isolation", async (t) =
     // Promote: write the parsed row into TRANSACTIONS, then soft-delete the staging row.
     const promote = await api(aliceJwt, {
       action: "batchCreate", table: "TRANSACTIONS",
-      rows: [{ id: tPromoted, amount: -1234.56, currency: "EUR", type: "expense", date: "2026-06-14" }],
+      rows: [{ id: tPromoted, enc: `v1.iv_${RUN}.ct_amount`, currency: "EUR", type: "expense", date: "2026-06-14" }],
     });
     assertEquals(promote.status, "success");
     const softDelete = await api(aliceJwt, {

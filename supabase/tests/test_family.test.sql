@@ -39,7 +39,7 @@ do $$ begin
          'header routes auth_family_id() to Alice test family';
 end $$;
 
-insert into public.wallets (id, name, currency) values ('w_tf_test', 'Alice Test', 'EUR');
+insert into public.wallets (id, currency, enc) values ('w_tf_test', 'EUR', 'v1.iv_tf_t.ct_alice_test');
 do $$ begin
   assert (select family_id from public.wallets where id = 'w_tf_test')
            = (select family_id from public.user_test_family where user_id = '00000000-0000-0000-0000-0000000000a1'),
@@ -56,7 +56,7 @@ do $$ begin
   assert (select count(*) from public.wallets) = 0, 'real family does not contain the test wallet';
 end $$;
 
-insert into public.wallets (id, name, currency) values ('w_tf_real', 'Alice Real', 'EUR');
+insert into public.wallets (id, currency, enc) values ('w_tf_real', 'EUR', 'v1.iv_tf_r.ct_alice_real');
 do $$ begin
   assert (select family_id from public.wallets where id = 'w_tf_real') = (select family_id from rfam where who = 'A'),
          'real-context write goes to the real family';

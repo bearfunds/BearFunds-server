@@ -39,7 +39,7 @@ do $$ begin
 end $$;
 
 -- Create a wallet with family_id omitted -> server-derived to Alice.
-insert into public.wallets (id, name, currency) values ('w_a1', 'Alice EUR', 'EUR');
+insert into public.wallets (id, currency, enc) values ('w_a1', 'EUR', 'v1.iv_a1.ct_alice_eur');
 do $$ begin
   assert (select family_id from public.wallets where id = 'w_a1') = (select family_id from fam where who = 'A'),
          'new wallet must be scoped to Alice family';
@@ -58,14 +58,14 @@ do $$ begin
 end $$;
 
 -- WRITE isolation: Bob's update of Alice's row hits nothing (row invisible).
-update public.wallets set name = 'HACKED' where id = 'w_a1';
+update public.wallets set enc = 'HACKED' where id = 'w_a1';
 do $$ begin
   assert not exists (select 1 from public.wallets where id = 'w_a1'), 'Alice wallet stays invisible to Bob';
 end $$;
 
 -- FORGERY: Bob inserts with Alice family_id in the body -> trigger forces it to Bob.
-insert into public.wallets (id, name, currency, family_id)
-  values ('w_b_forge', 'forged', 'USD', (select family_id from fam where who = 'A'));
+insert into public.wallets (id, currency, family_id)
+  values ('w_b_forge', 'USD', (select family_id from fam where who = 'A'));
 do $$ begin
   assert (select family_id from public.wallets where id = 'w_b_forge') = (select family_id from fam where who = 'B'),
          'forged family_id must be overwritten to Bob family';
@@ -75,7 +75,7 @@ reset role; reset request.jwt.claims;
 
 -- ============ Superuser: confirm Alice survived Bob entirely ============
 do $$ begin
-  assert (select name from public.wallets where id = 'w_a1') = 'Alice EUR', 'Alice wallet must be unchanged';
+  assert (select enc from public.wallets where id = 'w_a1') = 'v1.iv_a1.ct_alice_eur', 'Alice wallet must be unchanged';
   assert (select count(*) from public.wallets where family_id = (select family_id from fam where who = 'A')) = 1,
          'Alice family still has exactly one wallet';
   assert (select count(*) from public.wallets where family_id = (select family_id from fam where who = 'B')) = 1,
@@ -84,7 +84,7 @@ end $$;
 
 -- ============ updated_at is server-managed ============
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
-insert into public.wallets (id, name, currency, updated_at) values ('w_a2', 't', 'EUR', '2000-01-01T00:00:00Z');
+insert into public.wallets (id, currency, updated_at) values ('w_a2', 'EUR', '2000-01-01T00:00:00Z');
 do $$ begin
   assert (select updated_at from public.wallets where id = 'w_a2') > now() - interval '1 minute',
          'updated_at must be overwritten to server now()';
@@ -129,18 +129,19 @@ do $$ begin
   assert (select name from public.subcategories where id = 'sc_a1') = 'Groceries', 'Alice subcategory must be unchanged by Bob';
 end $$;
 
--- ============ staged_transactions: per-family isolation + raw-text amount (v1.10) ============
+-- ============ staged_transactions: per-family isolation + opaque enc envelope (v1.14) ============
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
--- Alice stages a partially-mapped import row: family_id omitted -> server-derived; amount
--- is RAW, unparsed text; FKs left null. Proves a not-yet-valid row can persist while staged.
-insert into public.staged_transactions (id, batch_id, amount, source_name, source_row)
-  values ('st_a1', 'batch_a', '-1.234,56', 'ACME / GMBH', '{"Memo":"ACME / GMBH","Value":"-1.234,56"}');
+-- Alice stages a partially-mapped import row: family_id omitted -> server-derived; the
+-- sensitive payload (raw amount text, source name/row) rides the opaque enc envelope
+-- (v1.14 RLE); FKs left null. Proves a not-yet-valid row can persist while staged.
+insert into public.staged_transactions (id, batch_id, enc)
+  values ('st_a1', 'batch_a', 'v1.iv_st_a1.ct_acme_row');
 do $$ begin
   assert (select family_id from public.staged_transactions where id = 'st_a1') = (select family_id from fam where who = 'A'),
          'new staged row must be scoped to Alice family';
   assert (select count(*) from public.staged_transactions) = 1, 'Alice sees exactly her staged row';
-  assert (select amount from public.staged_transactions where id = 'st_a1') = '-1.234,56',
-         'raw unparsed amount text must persist verbatim (not coerced to numeric)';
+  assert (select enc from public.staged_transactions where id = 'st_a1') = 'v1.iv_st_a1.ct_acme_row',
+         'opaque enc envelope must persist verbatim (server never touches it)';
   assert (select category_id from public.staged_transactions where id = 'st_a1') is null,
          'an unmapped FK may stay null while staged';
 end $$;
@@ -150,12 +151,12 @@ set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-000
 do $$ begin
   assert (select count(*) from public.staged_transactions) = 0, 'Bob must not see Alice staged row (read isolation)';
 end $$;
-update public.staged_transactions set source_name = 'HACKED' where id = 'st_a1';
+update public.staged_transactions set enc = 'HACKED' where id = 'st_a1';
 do $$ begin
   assert not exists (select 1 from public.staged_transactions where id = 'st_a1'), 'Alice staged row stays invisible to Bob';
 end $$;
-insert into public.staged_transactions (id, batch_id, amount, family_id)
-  values ('st_b_forge', 'batch_b', '9', (select family_id from fam where who = 'A'));
+insert into public.staged_transactions (id, batch_id, enc, family_id)
+  values ('st_b_forge', 'batch_b', 'v1.iv_forge.ct_9', (select family_id from fam where who = 'A'));
 do $$ begin
   assert (select family_id from public.staged_transactions where id = 'st_b_forge') = (select family_id from fam where who = 'B'),
          'forged family_id must be overwritten to Bob family';
@@ -163,7 +164,7 @@ end $$;
 reset role; reset request.jwt.claims;
 
 do $$ begin
-  assert (select source_name from public.staged_transactions where id = 'st_a1') = 'ACME / GMBH', 'Alice staged row must be unchanged by Bob';
+  assert (select enc from public.staged_transactions where id = 'st_a1') = 'v1.iv_st_a1.ct_acme_row', 'Alice staged row must be unchanged by Bob';
 end $$;
 
 -- ============ invites + join_family: control-plane RPCs (S9a / [Q8]) ============

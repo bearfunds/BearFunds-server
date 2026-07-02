@@ -21,10 +21,50 @@ function fakeDb() {
 Deno.test("strips server-derived & internal keys, keeps writable keys", () => {
   const req = parseRequest({
     action: "batchUpsert", table: "WALLETS",
-    rows: [{ id: "w1", name: "A", currency: "EUR", family_id: "forged", user_id: "x", updated_at: "2000", isDirty: true }],
+    rows: [{ id: "w1", enc: "v1.aaa.bbb", currency: "EUR", family_id: "forged", user_id: "x", updated_at: "2000", isDirty: true }],
   });
   if (req.action !== "batchUpsert") throw new Error("wrong action");
-  assertEquals(req.rows[0], { id: "w1", name: "A", currency: "EUR" });
+  assertEquals(req.rows[0], { id: "w1", enc: "v1.aaa.bbb", currency: "EUR" });
+});
+
+// RLE enforcement (contract v1.14): scoped plaintext keys are gone from the wire.
+// The server REJECTS them as unknown keys - encryption is enforced, not conventional.
+Deno.test("RLE: plaintext sensitive keys are rejected per table", () => {
+  const cases: [string, Record<string, unknown>][] = [
+    ["TRANSACTIONS", { id: "t1", amount: 5 }],
+    ["TRANSACTIONS", { id: "t1", description: "memo" }],
+    ["TRANSACTIONS", { id: "t1", tags: "[\"A\"]" }],
+    ["WALLETS", { id: "w1", name: "Main" }],
+    ["WALLETS", { id: "w1", description: "d" }],
+    ["ENTITIES", { id: "e1", name: "ACME" }],
+    ["ENTITIES", { id: "e1", aliases: "[]" }],
+    ["ENTITIES", { id: "e1", match_patterns: "[]" }],
+    ["STAGED_TRANSACTIONS", { id: "st1", amount: "-1,5" }],
+    ["STAGED_TRANSACTIONS", { id: "st1", source_row: "{}" }],
+    ["STAGED_TRANSACTIONS", { id: "st1", source_name: "x" }],
+  ];
+  for (const [table, row] of cases) {
+    assertThrows(
+      () => parseRequest({ action: "batchUpsert", table, rows: [row] }),
+      ValidationError, "Unknown key",
+      `${table} must reject ${Object.keys(row)[1]}`,
+    );
+  }
+});
+
+Deno.test("RLE: enc is writable only on envelope tables", () => {
+  for (const table of ["TRANSACTIONS", "WALLETS", "ENTITIES", "STAGED_TRANSACTIONS"]) {
+    const req = parseRequest({ action: "batchUpsert", table, rows: [{ id: "x1", enc: "v1.i.c" }] });
+    if (req.action !== "batchUpsert") throw new Error("wrong action");
+    assertEquals(req.rows[0], { id: "x1", enc: "v1.i.c" });
+  }
+  for (const table of ["CATEGORIES", "SUBCATEGORIES", "MEMBERS"]) {
+    assertThrows(
+      () => parseRequest({ action: "batchUpsert", table, rows: [{ id: "x1", enc: "v1.i.c" }] }),
+      ValidationError, "Unknown key 'enc'",
+      `${table} must not accept enc`,
+    );
+  }
 });
 
 Deno.test("rejects unknown row key (strict contract)", () => {
@@ -59,8 +99,8 @@ Deno.test("rejects unknown action and unknown table", () => {
 });
 
 Deno.test("batchUpsert requires id; batchCreate does not", () => {
-  assertThrows(() => parseRequest({ action: "batchUpsert", table: "WALLETS", rows: [{ name: "x" }] }), ValidationError);
-  const ok = parseRequest({ action: "batchCreate", table: "WALLETS", rows: [{ name: "x", currency: "EUR" }] });
+  assertThrows(() => parseRequest({ action: "batchUpsert", table: "WALLETS", rows: [{ enc: "v1.i.c" }] }), ValidationError);
+  const ok = parseRequest({ action: "batchCreate", table: "WALLETS", rows: [{ enc: "v1.i.c", currency: "EUR" }] });
   assert(ok.action === "batchCreate");
 });
 
@@ -73,9 +113,9 @@ Deno.test("read routes with since and maps logical->physical table", async () =>
 
 Deno.test("batchUpdate fans out per row id", async () => {
   const { db, calls } = fakeDb();
-  await runAction(parseRequest({ action: "batchUpdate", table: "TRANSACTIONS", updates: [{ id: "t1", amount: 5 }, { id: "t2", amount: 9 }] }), db, { isTest: false });
+  await runAction(parseRequest({ action: "batchUpdate", table: "TRANSACTIONS", updates: [{ id: "t1", enc: "v1.a.b" }, { id: "t2", enc: "v1.c.d" }] }), db, { isTest: false });
   assertEquals(calls.map((c) => c.op), ["update", "update"]);
-  assertEquals(calls[0].arg, { id: "t1", ch: { amount: 5 } });
+  assertEquals(calls[0].arg, { id: "t1", ch: { enc: "v1.a.b" } });
 });
 
 Deno.test("wipe is blocked outside test context, allowed inside", async () => {
@@ -94,16 +134,16 @@ Deno.test("empty batches are no-ops", async () => {
   assertEquals(calls.length, 0);
 });
 
-Deno.test("STAGED_TRANSACTIONS: strips server keys, keeps writable (raw amount, source_row, FKs)", () => {
+Deno.test("STAGED_TRANSACTIONS: strips server keys, keeps writable (enc envelope, null FKs)", () => {
   const req = parseRequest({
     action: "batchCreate", table: "STAGED_TRANSACTIONS",
     rows: [{
-      id: "st1", batch_id: "b1", amount: "-1.234,56", category_id: null,
-      source_row: '{"Memo":"x"}', family_id: "forged", updated_at: "2000", isDirty: true,
+      id: "st1", batch_id: "b1", enc: "v1.iv.ct", category_id: null,
+      family_id: "forged", updated_at: "2000", isDirty: true,
     }],
   });
   if (req.action !== "batchCreate") throw new Error("wrong action");
-  assertEquals(req.rows[0], { id: "st1", batch_id: "b1", amount: "-1.234,56", category_id: null, source_row: '{"Memo":"x"}' });
+  assertEquals(req.rows[0], { id: "st1", batch_id: "b1", enc: "v1.iv.ct", category_id: null });
 });
 
 Deno.test("STAGED_TRANSACTIONS: rejects unknown row key and read maps logical->physical", async () => {
