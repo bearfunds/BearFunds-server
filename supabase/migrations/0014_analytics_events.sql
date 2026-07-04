@@ -41,6 +41,20 @@ create table if not exists public.analytics_events (
 create index if not exists analytics_events_received_at_idx
   on public.analytics_events (received_at);
 
+-- Supabase auto-grants table privileges to anon/authenticated via ALTER DEFAULT
+-- PRIVILEGES on public (every new public table). Revoke them so the table is truly
+-- RPC-only: belt (no table privilege) AND suspenders (RLS deny-all). service_role
+-- keeps its access for analysis; the SECURITY DEFINER RPC (owner) writes.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'authenticated') then
+    revoke all on public.analytics_events from authenticated;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke all on public.analytics_events from anon;
+  end if;
+end $$;
+
 -- RLS enabled with NO policy: authenticated has no table grant and no policy, so
 -- it can never reach the table directly (deny-all backstop). service_role bypasses
 -- RLS for analysis; the SECURITY DEFINER RPC below writes as the table owner.

@@ -43,13 +43,18 @@ begin
   assert inserted = 0, 'duplicate idk is deduped (on conflict do nothing)';
 end $$;
 
--- No direct table access for authenticated: neither SELECT nor INSERT is granted.
+-- No direct READ for authenticated: either a permission error (privileges revoked)
+-- or an RLS-empty result (deny-all policy) - both mean the data is unreadable.
+-- Environment-robust so it holds on both stock Postgres and Supabase (whose default
+-- privileges auto-grant new public tables until the migration's REVOKE strips them).
 do $$
-declare denied boolean := false;
+declare visible int := -1;
 begin
-  begin perform 1 from public.analytics_events limit 1;
-  exception when others then denied := true; end;
-  assert denied, 'authenticated must NOT be able to SELECT analytics_events directly';
+  begin
+    select count(*) into visible from public.analytics_events;
+  exception when others then visible := 0;
+  end;
+  assert visible = 0, 'authenticated must NOT be able to READ analytics_events data (denied or RLS-empty)';
 end $$;
 do $$
 declare denied boolean := false;
