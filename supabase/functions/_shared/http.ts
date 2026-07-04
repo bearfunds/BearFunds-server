@@ -27,7 +27,7 @@ export interface AuthResult {
 export async function requireUser(req: Request): Promise<Response | AuthResult> {
   const authHeader = req.headers.get("Authorization") ?? "";
   if (!authHeader.toLowerCase().startsWith("bearer ")) {
-    return json({ status: "error", message: "Missing bearer token." }, 401);
+    return json({ status: "error", code: "AUTH", message: "Missing bearer token." }, 401);
   }
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
@@ -36,7 +36,7 @@ export async function requireUser(req: Request): Promise<Response | AuthResult> 
   );
   const { data, error } = await supabase.auth.getUser();
   if (error || !data?.user) {
-    return json({ status: "error", message: "Unauthenticated." }, 401);
+    return json({ status: "error", code: "AUTH", message: "Unauthenticated." }, 401);
   }
   return { supabase, userId: data.user.id };
 }

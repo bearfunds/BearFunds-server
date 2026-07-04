@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<!-- Canonical: BearFunds-server · v1.14
+<!-- Canonical: BearFunds-server · v1.15
   This repo is the canonical home for the shared client<->server Schema Contract
   (re-home decided in the brain's Sources of Truth, 2026-06-01; executed 2026-06-02).
   It is NOT casually editable. Any change is a deliberate version bump with a one-line
   rationale; the operator drops the versioned copy into the client (downstream consumer).
-  v1.14 (BREAKING - Row-Level Encryption): sensitive fields (transaction amount/notes/tags,
+  v1.15 (BREAKING - Row-Level Encryption): sensitive fields (transaction amount/notes/tags,
   wallet name/description, entity name/aliases/patterns, staged raw import fields) move into
   an opaque client-encrypted `enc` envelope column on TRANSACTIONS/WALLETS/ENTITIES/
   STAGED_TRANSACTIONS; their plaintext keys are REMOVED from the wire and rejected as
@@ -12,11 +12,11 @@
   clean cut (2026-07-02): no compatibility window; deploy is coordinated client+server
   with a data wipe + fresh initial upload. Categories/subcategories/members stay plaintext
   by design. -->
-<SchemaContract version="1.14">
+<SchemaContract version="1.15">
     <Meta>
         <Description>Immutable Source of Truth for Backend API and Database Schema</Description>
         <Usage>Paste this into the AI Context before generating any API or Data Fetching code.</Usage>
-        <Canonical>BearFunds-server · v1.14</Canonical>
+        <Canonical>BearFunds-server · v1.15</Canonical>
     </Meta>
     <Protocol>
         <Rule name="Endpoint">Single Entry Point (one POST endpoint). RESTful routes (GET /transactions) DO NOT exist.</Rule>
@@ -25,7 +25,7 @@
         <Rule name="Tenancy">family_id is SERVER-DERIVED from the authenticated session and applied server-side. A client-supplied family_id/user_id in the body is ignored/overwritten. Row-Level Security enforces per-family isolation as the backstop.</Rule>
         <Rule name="Encryption">Row-Level Encryption (v1.14). Sensitive fields ride the per-row `enc` column: an opaque client-encrypted envelope "v1.{b64 iv}.{b64 ciphertext}" (AES-256-GCM, family key, AAD-bound to table:id). The server stores and returns `enc` verbatim, never inspects it, and REJECTS the removed plaintext keys as unknown. Keys never leave family devices; there is no server-side recovery.</Rule>
         <Rule name="Concurrency">Client must use a Request Queue. Network calls are strictly serial.</Rule>
-        <Rule name="ErrorHandling">Strict. Unknown keys in payload will trigger a generic API error.</Rule>
+        <Rule name="ErrorHandling">Strict. Error envelope: { status: 'error', code, message } where `code` is a closed enum - AUTH (401), VALIDATION (400/405, incl. unknown payload keys and malformed bodies), RLS_DENIED (403), CONFLICT (409), INTERNAL (500). Messages are fixed, leak-free texts: VALIDATION carries the authored validation detail; no raw database detail (table, policy, or constraint names) ever reaches the wire.</Rule>
     </Protocol>
     <Payloads>
         <Action name="read">
@@ -84,7 +84,6 @@
         </Table>
         <Table name="TRANSACTIONS"
                key="TRANSACTIONS">
-            <Note>v1.14 RLE: amount, description (notes) and tags moved INTO the enc envelope. Those plaintext keys no longer exist on the wire and are rejected.</Note>
             <Column key="id"
                     type="String"
                     description="Primary Key as UUID, or special cases for 'immutable / test' logic" />
@@ -157,7 +156,6 @@
         </Table>
         <Table name="WALLETS"
                key="WALLETS">
-            <Note>v1.14 RLE: name and description moved INTO the enc envelope.</Note>
             <Column key="id"
                     type="String"
                     description="Primary Key, formatted as 'w001', or special cases for 'immutable' logic" />
@@ -176,7 +174,6 @@
         </Table>
         <Table name="ENTITIES"
                key="ENTITIES">
-            <Note>v1.14 RLE: name, aliases and match_patterns moved INTO the enc envelope (they identify merchants/payees).</Note>
             <Column key="id"
                     type="String"
                     description="Primary Key, formatted as 'e001', or special cases for 'immutable' logic" />
@@ -217,7 +214,6 @@
         </Table>
         <Table name="STAGED_TRANSACTIONS"
                key="STAGED_TRANSACTIONS">
-            <Note>Synced import staging area. Rows are partially-mapped, possibly-invalid import candidates the client bulk-edits before promotion. On commit, valid rows are copied into TRANSACTIONS (client-orchestrated batchCreate) and the staging rows are soft-deleted. RLS-scoped by family_id like every domain table. v1.14 RLE: the raw import payload (unparsed amount text, notes, tags, source_wallet/category/name and the full source_row) moved INTO the enc envelope.</Note>
             <Column key="id"
                     type="String (UUID)"
                     description="Primary Key." />
