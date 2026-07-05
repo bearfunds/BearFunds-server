@@ -40,7 +40,7 @@ The **BearFunds brain vault** (separate repo; at `D:\Projects\Brains\BearFunds`)
 Brain Reference docs (under `Areas/BearFunds/`):
 - `Reference/BearFunds Server Architecture.md` — the design this repo implements (datastore, auth, tenancy, contract handling, migration path).
 - `Reference/BearFunds Schema Contract.md`, `Reference/BearFunds Data Model.md`, `Reference/BearFunds Persistence and Sync.md` — the contract map, the `Syncable` model, and the client's sync layer this server must interoperate with.
-- `Sources of Truth.md` (governance + the Schema Contract re-home), `Migration Playbook.md` (esp. L2 auth, L4 server-authoritative sync), `Open Questions.md` (Q1 secrets, Q3 Sheets, Q7 role-enum).
+- `Sources of Truth.md` (governance + the Schema Contract re-home), `Open Questions.md` (the decision registry). The completed `Migration Playbook.md` (esp. L2 auth, L4 server-authoritative sync) is archived at `Archive/BearFunds/` (vault reorg 2026-07-05).
 
 ## Setup (done - kept for history)
 
