@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<!-- Canonical: BearFunds-server · v1.15
+<!-- Canonical: BearFunds-server · v1.16
   This repo is the canonical home for the shared client<->server Schema Contract
   (re-home decided in the brain's Sources of Truth, 2026-06-01; executed 2026-06-02).
   It is NOT casually editable. Any change is a deliberate version bump with a one-line
@@ -11,12 +11,18 @@
   unknown keys. The server stores `enc` verbatim and never reads inside it. Alpha-phase
   clean cut (2026-07-02): no compatibility window; deploy is coordinated client+server
   with a data wipe + fresh initial upload. Categories/subcategories/members stay plaintext
-  by design. -->
-<SchemaContract version="1.15">
+  by design.
+  v1.16 (ADDITIVE - Budgets): new BUDGETS table. A Budget is an optional informational
+  layer over transactions/accounts/categories, scoped to a period; it never holds or moves
+  money. It is an ENC table: name, amount, note, percent AND the category/account membership
+  all ride the `enc` envelope, so only the period/currency scaffolding is plaintext. The
+  server therefore cannot enforce the one-category-per-Budget-per-period rule; the client
+  owns it. Utilization is computed on device from the ledger, never snapshotted. -->
+<SchemaContract version="1.16">
     <Meta>
         <Description>Immutable Source of Truth for Backend API and Database Schema</Description>
         <Usage>Paste this into the AI Context before generating any API or Data Fetching code.</Usage>
-        <Canonical>BearFunds-server · v1.15</Canonical>
+        <Canonical>BearFunds-server · v1.16</Canonical>
     </Meta>
     <Protocol>
         <Rule name="Endpoint">Single Entry Point (one POST endpoint). RESTful routes (GET /transactions) DO NOT exist.</Rule>
@@ -171,6 +177,36 @@
                     type="String" />
             <Column key="is_default"
                     type="Boolean" />
+        </Table>
+        <Table name="BUDGETS"
+               key="BUDGETS">
+            <Column key="id"
+                    type="String"
+                    description="Primary Key, formatted as 'b001'" />
+            <Column key="enc"
+                    type="String"
+                    description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { name: String, amount: Number, note: String (optional), percent: Number (optional), category_ids: String[], wallet_ids: String[] }." />
+            <Column key="currency"
+                    type="String"
+                    description="ISO Code. One Budget = one currency; never converted." />
+            <Column key="period_type"
+                    type="String"
+                    description="'weekly', 'monthly', 'annual', 'one_off'" />
+            <Column key="kind"
+                    type="String"
+                    description="'template' (the recurring series definition) or 'instance' (a live, independently editable period). A one-off Budget is always an instance with no template_id." />
+            <Column key="template_id"
+                    type="String"
+                    description="FK -> Budgets. Set on an instance of a recurring series; absent on templates and one-offs." />
+            <Column key="period_start"
+                    type="String"
+                    description="ISO YYYY-MM-DD. Instance: the period's start. Template: the series start point." />
+            <Column key="period_end"
+                    type="String"
+                    description="ISO YYYY-MM-DD. Instance/one-off: the period's end. Absent on a template (open-ended)." />
+            <Column key="stopped_at"
+                    type="String"
+                    description="ISO YYYY-MM-DD. Template only: no instances materialise after this date." />
         </Table>
         <Table name="ENTITIES"
                key="ENTITIES">

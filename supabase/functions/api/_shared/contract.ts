@@ -1,13 +1,17 @@
-// Schema Contract v1.14 - the single source of allowed tables, logical->physical
+// Schema Contract v1.16 - the single source of allowed tables, logical->physical
 // table mapping, and per-table writable column allowlists (snake_case logical keys).
 // Keys the client must never set (tenancy/sync-internal) are stripped, not errored.
 // v1.14 (RLE): sensitive fields ride an opaque client-encrypted `enc` envelope on
 // TRANSACTIONS / WALLETS / ENTITIES / STAGED_TRANSACTIONS; their plaintext keys are
 // REMOVED from the allowlists so the server rejects any plaintext write (enforced,
 // not conventional). Categories/subcategories/members stay plaintext by design.
+// v1.16 (additive): BUDGETS - a synced informational layer over transactions. It is an
+// ENC table: name/amount/note/percent AND the category+account membership all ride the
+// envelope, so only the period/currency scaffolding is plaintext.
 
 export type LogicalTable =
-  | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "WALLETS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS";
+  | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "WALLETS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS"
+  | "BUDGETS";
 
 export const PHYSICAL: Record<LogicalTable, string> = {
   TRANSACTIONS: "transactions",
@@ -17,6 +21,7 @@ export const PHYSICAL: Record<LogicalTable, string> = {
   ENTITIES: "entities",
   MEMBERS: "members",
   STAGED_TRANSACTIONS: "staged_transactions",
+  BUDGETS: "budgets",
 };
 
 // Server-managed / client-derived keys: silently removed from any inbound row.
@@ -54,6 +59,13 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
     ...GLOBAL_WRITABLE,
     "batch_id", "date", "currency", "type", "category_id", "sub_category_id",
     "entity_id", "wallet_id", "member_id", "status", "enc",
+  ]),
+  // BUDGETS is an ENC table: no plaintext name/amount/note/membership key is writable,
+  // so a plaintext write is REJECTED (VALIDATION), not merely unexpected.
+  BUDGETS: new Set([
+    ...GLOBAL_WRITABLE,
+    "currency", "period_type", "kind", "template_id",
+    "period_start", "period_end", "stopped_at", "enc",
   ]),
 };
 

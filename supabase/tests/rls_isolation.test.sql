@@ -361,6 +361,58 @@ do $t$ begin
   assert (select name from public.categories where id='c001' and family_id=(select family_id from fam where who='B')) = 'Bob Food', 'Bob c001 distinct from Alice';
 end $t$;
 
+-- ============ budgets: per-family isolation + opaque enc envelope (v1.16) ============
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+-- Alice creates a recurring monthly Budget template. family_id omitted -> server-derived.
+-- The whole meaningful payload (name, amount, note, category+account membership) rides the
+-- opaque enc envelope; only the period/currency scaffolding is plaintext.
+insert into public.budgets (id, currency, period_type, kind, period_start, enc)
+  values ('b_a1', 'EUR', 'monthly', 'template', '2026-07-01', 'v1.aXY=.Zm9v');
+do $t$ begin
+  assert (select family_id from public.budgets where id = 'b_a1') = (select family_id from fam where who = 'A'),
+         'new budget must be scoped to Alice family';
+  assert (select count(*) from public.budgets) = 1, 'Alice sees exactly her budget';
+  assert (select updated_at from public.budgets where id = 'b_a1') is not null,
+         'budgets_set_updated_at trigger must stamp updated_at (without it, delta sync silently drops every budget edit)';
+end $t$;
+reset role; reset request.jwt.claims;
+
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert (select count(*) from public.budgets) = 0, 'Bob must not see Alice budget (read isolation)';
+end $t$;
+update public.budgets set enc = 'v1.HACKED.HACKED' where id = 'b_a1';
+do $t$ begin
+  assert not exists (select 1 from public.budgets where id = 'b_a1'), 'Alice budget stays invisible to Bob';
+end $t$;
+-- A forged family_id must be overwritten to the CALLER's family, not honoured.
+insert into public.budgets (id, currency, period_type, kind, period_start, enc, family_id)
+  values ('b_b_forge', 'EUR', 'monthly', 'template', '2026-07-01', 'v1.aXY=.Zm9v', (select family_id from fam where who = 'A'));
+do $t$ begin
+  assert (select family_id from public.budgets where id = 'b_b_forge') = (select family_id from fam where who = 'B'),
+         'forged family_id must be overwritten to Bob family';
+end $t$;
+reset role; reset request.jwt.claims;
+
+do $t$ begin
+  assert (select enc from public.budgets where id = 'b_a1') = 'v1.aXY=.Zm9v', 'Alice budget must be unchanged by Bob';
+end $t$;
+
+-- Composite PK (family_id, id): both families may hold the SAME budget id (seeded templates
+-- use fixed ids). A global id PK would collide -> RLS-denied upsert -> 500 (the 0009 bug).
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+insert into public.budgets (id, currency, period_type, kind, period_start, enc)
+  values ('b001', 'EUR', 'monthly', 'template', '2026-07-01', 'v1.alice.enc');
+reset role; reset request.jwt.claims;
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+insert into public.budgets (id, currency, period_type, kind, period_start, enc)
+  values ('b001', 'EUR', 'monthly', 'template', '2026-07-01', 'v1.bob.enc');
+reset role; reset request.jwt.claims;
+do $t$ begin
+  assert (select count(*) from public.budgets where id = 'b001') = 2, 'both families hold a b001 row';
+  assert (select enc from public.budgets where id='b001' and family_id=(select family_id from fam where who='A')) = 'v1.alice.enc', 'Alice b001 unchanged by Bob';
+end $t$;
+
 -- ============ family_version(): family-scoped sync high-water mark (v1.13) ============
 -- The `version` action returns max(updated_at) across the caller's tenant tables. The suite
 -- runs in ONE transaction, so now() (and every trigger-set updated_at) is frozen -- which
@@ -384,6 +436,32 @@ do $t$ begin
   assert public.family_version() is not null, 'Bob version is non-null (he has rows)';
   assert public.family_version() < '2099-01-01T00:00:00Z'::timestamptz,
          'Bob version does NOT see Alice future row (per-family isolation)';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- budgets must be REGISTERED in family_version() (v1.16). The silent break this pins:
+-- family_version() is a hardcoded union per tenant table, so omitting budgets returns a
+-- stale high-water mark and a device whose ONLY change is a budget edit is told "nothing
+-- changed" and never syncs -- with no error anywhere.
+-- CONTROL first: before the forge, Bob's version sits BELOW the probe timestamp - so the
+-- assert after it can actually fail (a check that cannot fail is not a check).
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert public.family_version() < '2098-01-01T00:00:00Z'::timestamptz,
+         'CONTROL: Bob version is below the budgets probe timestamp before the forge';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- Forge a far-future updated_at on Bob's budget with the trigger disabled (the suite runs in
+-- one transaction, so now() is frozen and every updated_at would otherwise be identical).
+set session_replication_role = replica;
+update public.budgets set updated_at = '2098-01-01T00:00:00Z' where id = 'b_b_forge';
+set session_replication_role = origin;
+
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert public.family_version() = '2098-01-01T00:00:00Z'::timestamptz,
+         'a budgets row MUST move family_version() (budgets registered in the union)';
 end $t$;
 reset role; reset request.jwt.claims;
 

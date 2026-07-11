@@ -7,7 +7,7 @@ This is the **server** of BearFunds ("Sweet Savings For Families") — the backe
 ## Read these first (in order)
 
 1. **`0_AI_INSTRUCTIONS.md`** — the engineering protocol. The canonical working discipline (Impact Analysis → Approval Lock → Test-first → Verify), adapted for server work (contract bumps, tenancy, RLS). Read it fully and follow it exactly. It is authoritative over this file if they ever disagree.
-2. **`2_SCHEMA_CONTRACT.xml`** — the backend API + DB contract (v1.14). **This repo is its canonical home** (the producer owns the interface; decided in the brain's Sources of Truth, 2026-06-01). It is a *shared* client↔server interface, so changes are deliberate version bumps that the operator drops into the client — never casual edits. The canonical copy carries a `Canonical: BearFunds-server · vX.Y` header line; the client keeps a downstream drop-in.
+2. **`2_SCHEMA_CONTRACT.xml`** — the backend API + DB contract (v1.16). **This repo is its canonical home** (the producer owns the interface; decided in the brain's Sources of Truth, 2026-06-01). It is a *shared* client↔server interface, so changes are deliberate version bumps that the operator drops into the client — never casual edits. The canonical copy carries a `Canonical: BearFunds-server · vX.Y` header line; the client keeps a downstream drop-in.
 
 ## The working loop (summary — `0_AI_INSTRUCTIONS.md` is canonical)
 
@@ -18,10 +18,11 @@ This is the **server** of BearFunds ("Sweet Savings For Families") — the backe
 ## Architecture orientation (DEPLOYED — see the brain for the full design)
 
 - **Platform:** Supabase — managed **Postgres** (datastore), **Auth** (Google sign-in), and **Edge Functions** (the API seam).
-- **API seam:** a single Edge Function that **honors the v1.13 Schema Contract** — one POST endpoint, action-based (`read`/`batchCreate`/`batchUpdate`/`batchUpsert`/`wipe`/`version`), snake_case logical keys, `{ status, data }` envelope. This keeps the client's `core/api/` layer almost unchanged (it swaps the shared bundle key for a Supabase session JWT).
-- **Datastore:** one table per client collection (`transactions`, `categories`, `subcategories`, `wallets`, `entities`, `members`, `staged_transactions`) + a `families` tenancy root, mapping the brain's `Syncable` model 1:1, with server-managed `updated_at`, soft-delete `deleted`, and `is_immutable`.
+- **API seam:** a single Edge Function that **honors the v1.16 Schema Contract** — one POST endpoint, action-based (`read`/`batchCreate`/`batchUpdate`/`batchUpsert`/`wipe`/`version`), snake_case logical keys, `{ status, data }` envelope. This keeps the client's `core/api/` layer almost unchanged (it swaps the shared bundle key for a Supabase session JWT).
+- **Datastore:** one table per client collection (`transactions`, `categories`, `subcategories`, `wallets`, `entities`, `members`, `staged_transactions`, `budgets`) + a `families` tenancy root, mapping the brain's `Syncable` model 1:1, with server-managed `updated_at`, soft-delete `deleted`, and `is_immutable`.
 - **Tenancy/auth:** every tenant row carries a server-derived `family_id`, enforced by Postgres **RLS**; `FamilyMember.role` (`admin`/`member`) is server-enforced. Secrets (Gemini, JWT) live server-side, never in the client bundle.
-- A RESTful **v2** contract is deferred future work; honor v1.14 now.
+- A RESTful **v2** contract is deferred future work; honor v1.16 now.
+- **BUDGETS (v1.16)** is a tenant table like any other, with one property worth stating: its whole meaningful payload - name, amount, note AND the category/account membership - rides the `enc` envelope. The server therefore cannot enforce the one-category-per-Budget-per-period rule; the client owns it (`core/budgetPolicy.ts`, with a unit matrix). Utilization is computed on device from the ledger, never snapshotted.
 
 ## Critical guardrails
 

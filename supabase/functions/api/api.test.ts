@@ -42,6 +42,12 @@ Deno.test("RLE: plaintext sensitive keys are rejected per table", () => {
     ["STAGED_TRANSACTIONS", { id: "st1", amount: "-1,5" }],
     ["STAGED_TRANSACTIONS", { id: "st1", source_row: "{}" }],
     ["STAGED_TRANSACTIONS", { id: "st1", source_name: "x" }],
+    // BUDGETS (v1.16): name/amount/note AND the category+account membership all ride enc.
+    ["BUDGETS", { id: "b1", name: "Groceries" }],
+    ["BUDGETS", { id: "b1", amount: 400 }],
+    ["BUDGETS", { id: "b1", note: "new coffee machine" }],
+    ["BUDGETS", { id: "b1", category_ids: "[\"c1\"]" }],
+    ["BUDGETS", { id: "b1", wallet_ids: "[\"w1\"]" }],
   ];
   for (const [table, row] of cases) {
     assertThrows(
@@ -53,7 +59,7 @@ Deno.test("RLE: plaintext sensitive keys are rejected per table", () => {
 });
 
 Deno.test("RLE: enc is writable only on envelope tables", () => {
-  for (const table of ["TRANSACTIONS", "WALLETS", "ENTITIES", "STAGED_TRANSACTIONS"]) {
+  for (const table of ["TRANSACTIONS", "WALLETS", "ENTITIES", "STAGED_TRANSACTIONS", "BUDGETS"]) {
     const req = parseRequest({ action: "batchUpsert", table, rows: [{ id: "x1", enc: "v1.i.c" }] });
     if (req.action !== "batchUpsert") throw new Error("wrong action");
     assertEquals(req.rows[0], { id: "x1", enc: "v1.i.c" });
