@@ -361,13 +361,16 @@ do $t$ begin
   assert (select name from public.categories where id='c001' and family_id=(select family_id from fam where who='B')) = 'Bob Food', 'Bob c001 distinct from Alice';
 end $t$;
 
--- ============ budgets: per-family isolation + opaque enc envelope (v1.16) ============
+-- ============ budgets: per-family isolation + opaque enc envelope (v1.17) ============
+-- RESHAPED BY 0017 (the Budgets/Areas remodel). Every row is now an INSTANCE, and the plaintext
+-- surface is down to kind + period_type: the period bounds, the recurring line id and the WHOLE
+-- plan (target, accounts, Areas, category membership) ride the enc envelope. The isolation
+-- properties below are re-asserted against the new shape - a tenant table that changes shape gets
+-- its own RLS test (server convention; risk map S3).
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
--- Alice creates a recurring monthly Budget template. family_id omitted -> server-derived.
--- The whole meaningful payload (name, amount, note, category+account membership) rides the
--- opaque enc envelope; only the period/currency scaffolding is plaintext.
-insert into public.budgets (id, currency, period_type, kind, period_start, enc)
-  values ('b_a1', 'EUR', 'monthly', 'template', '2026-07-01', 'v1.aXY=.Zm9v');
+-- Alice creates a monthly Budget. family_id omitted -> server-derived.
+insert into public.budgets (id, period_type, kind, enc)
+  values ('b_a1', 'monthly', 'instance', 'v1.aXY=.Zm9v');
 do $t$ begin
   assert (select family_id from public.budgets where id = 'b_a1') = (select family_id from fam where who = 'A'),
          'new budget must be scoped to Alice family';
@@ -386,8 +389,8 @@ do $t$ begin
   assert not exists (select 1 from public.budgets where id = 'b_a1'), 'Alice budget stays invisible to Bob';
 end $t$;
 -- A forged family_id must be overwritten to the CALLER's family, not honoured.
-insert into public.budgets (id, currency, period_type, kind, period_start, enc, family_id)
-  values ('b_b_forge', 'EUR', 'monthly', 'template', '2026-07-01', 'v1.aXY=.Zm9v', (select family_id from fam where who = 'A'));
+insert into public.budgets (id, period_type, kind, enc, family_id)
+  values ('b_b_forge', 'monthly', 'instance', 'v1.aXY=.Zm9v', (select family_id from fam where who = 'A'));
 do $t$ begin
   assert (select family_id from public.budgets where id = 'b_b_forge') = (select family_id from fam where who = 'B'),
          'forged family_id must be overwritten to Bob family';
@@ -398,19 +401,38 @@ do $t$ begin
   assert (select enc from public.budgets where id = 'b_a1') = 'v1.aXY=.Zm9v', 'Alice budget must be unchanged by Bob';
 end $t$;
 
--- Composite PK (family_id, id): both families may hold the SAME budget id (seeded templates
--- use fixed ids). A global id PK would collide -> RLS-denied upsert -> 500 (the 0009 bug).
+-- Composite PK (family_id, id): both families may hold the SAME budget id. Budget ids are random
+-- at v1.17, so a collision is now vanishingly unlikely rather than routine - but B5 will seed
+-- Budgets with fixed ids, and a global id PK would collide -> RLS-denied upsert -> 500 (the 0009
+-- bug). The property is cheap to keep and expensive to rediscover.
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
-insert into public.budgets (id, currency, period_type, kind, period_start, enc)
-  values ('b001', 'EUR', 'monthly', 'template', '2026-07-01', 'v1.alice.enc');
+insert into public.budgets (id, period_type, kind, enc)
+  values ('b001', 'monthly', 'instance', 'v1.alice.enc');
 reset role; reset request.jwt.claims;
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
-insert into public.budgets (id, currency, period_type, kind, period_start, enc)
-  values ('b001', 'EUR', 'monthly', 'template', '2026-07-01', 'v1.bob.enc');
+insert into public.budgets (id, period_type, kind, enc)
+  values ('b001', 'monthly', 'instance', 'v1.bob.enc');
 reset role; reset request.jwt.claims;
 do $t$ begin
   assert (select count(*) from public.budgets where id = 'b001') = 2, 'both families hold a b001 row';
   assert (select enc from public.budgets where id='b001' and family_id=(select family_id from fam where who='A')) = 'v1.alice.enc', 'Alice b001 unchanged by Bob';
+end $t$;
+
+-- v1.17: the behavioural-metadata columns are GONE from the wire AND from the table.
+-- This is the S1 mitigation, and it is only real if the columns actually do not exist: a
+-- server that still HAS `period_start` can still be made to store it. CONTROL first, so the
+-- assertion below can fail - `enc` is a column that certainly exists.
+do $t$ begin
+  assert exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'budgets' and column_name = 'enc'
+  ), 'CONTROL: budgets.enc exists (so the absence checks below can actually fail)';
+
+  assert not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'budgets'
+      and column_name in ('currency', 'template_id', 'stopped_at', 'period_start', 'period_end')
+  ), 'v1.17: currency / template_id / stopped_at / period_start / period_end must be DROPPED - a one-off Budget period range in plaintext publishes a family holiday dates to the server';
 end $t$;
 
 -- ============ family_version(): family-scoped sync high-water mark (v1.13) ============

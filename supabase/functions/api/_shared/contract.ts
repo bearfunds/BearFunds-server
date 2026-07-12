@@ -8,6 +8,11 @@
 // v1.16 (additive): BUDGETS - a synced informational layer over transactions. It is an
 // ENC table: name/amount/note/percent AND the category+account membership all ride the
 // envelope, so only the period/currency scaffolding is plaintext.
+// v1.17 (BREAKING + DESTRUCTIVE): the Budgets/Areas remodel. Budgets become period-scoped
+// containers of Areas; templates are gone (every row is an instance). The plaintext surface
+// shrinks to kind + period_type - the period bounds, the line id and the entire plan move
+// inside the envelope, so the server can no longer read a family's cadence, currency, or a
+// one-off's exact date range. Budget rows are WIPED by migration 0017 (alpha; no user data).
 
 export type LogicalTable =
   | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "WALLETS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS"
@@ -60,12 +65,20 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
     "batch_id", "date", "currency", "type", "category_id", "sub_category_id",
     "entity_id", "wallet_id", "member_id", "status", "enc",
   ]),
-  // BUDGETS is an ENC table: no plaintext name/amount/note/membership key is writable,
-  // so a plaintext write is REJECTED (VALIDATION), not merely unexpected.
+  // BUDGETS is an ENC table, and at v1.17 it is very nearly ONLY an enc table. The whole plan -
+  // name, target, Areas, category + account membership, the period bounds, the recurring line id -
+  // rides the envelope, so a plaintext write of any of it is REJECTED (VALIDATION), not merely
+  // ignored. That rejection is load-bearing: it is what makes an old v1 client fail LOUDLY against
+  // a v1.17 server instead of silently writing rows nobody can read back. Hence the deploy gate -
+  // server and client ship together.
+  //
+  // What remains writable is deliberately inert: `kind` is a single constant ('instance'), and
+  // `period_type` is a coarse cadence. Neither is sensitive, neither is computed over server-side,
+  // and both exist for debuggability. currency / template_id / period_start / period_end /
+  // stopped_at are GONE (migration 0017 drops the columns).
   BUDGETS: new Set([
     ...GLOBAL_WRITABLE,
-    "currency", "period_type", "kind", "template_id",
-    "period_start", "period_end", "stopped_at", "enc",
+    "period_type", "kind", "enc",
   ]),
 };
 
