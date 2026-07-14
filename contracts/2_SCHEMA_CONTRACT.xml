@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<!-- Canonical: BearFunds-server · v1.18
+<!-- Canonical: BearFunds-server · v1.19
   This repo is the canonical home for the shared client<->server Schema Contract
   (re-home decided in the brain's Sources of Truth, 2026-06-01; executed 2026-06-02).
   It is NOT casually editable. Any change is a deliberate version bump with a one-line
@@ -30,12 +30,16 @@
   v1.18 (ADDITIVE - Area icons): each Area inside the budgets `enc` envelope carries an `icon`
   (a lucide icon name). The server stores `enc` verbatim and reads none of it, so this is a
   client-side model change with no migration, no policy and no server code. Absent on read = the
-  client's fallback icon. -->
-<SchemaContract version="1.18">
+  client's fallback icon.
+  v1.19 (ADDITIVE - ignored categories): the budgets `enc` envelope carries an optional
+  `ignored_category_ids` (String[]): the categories a Budget deliberately does not watch.
+  The server stores `enc` verbatim and reads none of it - no migration, no policy, no
+  server code. Absent on read = nothing ignored. -->
+<SchemaContract version="1.19">
     <Meta>
         <Description>Immutable Source of Truth for Backend API and Database Schema</Description>
         <Usage>Paste this into the AI Context before generating any API or Data Fetching code.</Usage>
-        <Canonical>BearFunds-server · v1.18</Canonical>
+        <Canonical>BearFunds-server · v1.19</Canonical>
     </Meta>
     <Protocol>
         <Rule name="Endpoint">Single Entry Point (one POST endpoint). RESTful routes (GET /transactions) DO NOT exist.</Rule>
@@ -197,7 +201,7 @@
                     type="String"
                     description="Primary Key. Random, minted on the creating device. Never derived: convergence is by client-side dedup on the decrypted instructions, not by id construction." />
             <Field name="enc" type="String" nullable="false"
-					description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { line_id: String (groups the instances of one recurring Budget; random, copied on duplication), live: Boolean (this line duplicates into the next period), period_start: String (ISO YYYY-MM-DD), period_end: String (ISO YYYY-MM-DD), target: Number (optional - what the family intends to spend or save this period; absent = the user skipped it, and the card then shows allocated vs actual only), wallet_ids: String[] (the accounts the Budget aggregates; the first one selected fixed the currency, which is NEVER stored), areas: [{ id: String, name: String, amount: Number, category_ids: String[], icon: String (a lucide icon name; the Area's identity on every card. It is rendered in ONE colour - the Area's HEALTH - so no colour is chosen and none is stored. Optional on the wire and defaulted on read, so a row written without it still opens) }] (the plan; the Area amounts sum to the ALLOCATED total, which is derived and never stored), adjustments: [{ area_id: String, amount: Number }] (period-local reallocations; they die with their period and are never duplicated forward), note: String (optional) }." />
+					description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { line_id: String (groups the instances of one recurring Budget; random, copied on duplication), live: Boolean (this line duplicates into the next period), period_start: String (ISO YYYY-MM-DD), period_end: String (ISO YYYY-MM-DD), target: Number (optional - what the family intends to spend or save this period; absent = the user skipped it, and the card then shows allocated vs actual only), wallet_ids: String[] (the accounts the Budget aggregates; the first one selected fixed the currency, which is NEVER stored), areas: [{ id: String, name: String, amount: Number, category_ids: String[], icon: String (a lucide icon name; the Area's identity on every card. It is rendered in ONE colour - the Area's HEALTH - so no colour is chosen and none is stored. Optional on the wire and defaulted on read, so a row written without it still opens) }] (the plan; the Area amounts sum to the ALLOCATED total, which is derived and never stored), ignored_category_ids: String[] (optional - categories this Budget DELIBERATELY does not watch. Every category no Area claims is otherwise reported as a planning gap; ignoring one records that the omission was a decision, so it stops being reported. It does NOT stop the money: spend in an ignored category still fails to move the Budget, and the unclaimed-SPEND figure still counts it. Per Budget, never global. Absent = none ignored), adjustments: [{ area_id: String, amount: Number }] (period-local reallocations; they die with their period and are never duplicated forward), note: String (optional) }." />
             <Column key="kind"
                     type="String"
                     description="'instance' - the only kind. Retained as a plaintext debuggability token and a forward hook; templates no longer exist." />
