@@ -2,7 +2,7 @@
 
 Entry point for any Claude Code session in this repo. This file is a **thin loader**: it points at the canonical sources of truth rather than restating them, so there is exactly one authoritative copy of each. Read the chain below before doing any work.
 
-This is the **server** of BearFunds ("Sweet Savings For Families") — the backend that introduces real authentication, multi-family tenancy, and server-side secrets. The **client repo** (React 19 + TS + Vite, offline-first) lives separately at `D:\Projects\github\BearFunds-client`; a **brain vault** at `D:\Projects\Brains\BearFunds` holds the decisions and synthesis. This repo is **scaffolded and DEPLOYED** (live since 2026-06-17): a Supabase project under `supabase/` (migrations 0001-0012 + RLS policies + the `api` data Edge Function and the `parse-receipt` AI Edge Function) plus `contracts/` (the canonical Schema Contract). The design it implements is the brain's [[BearFunds Server Architecture]] (Q6).
+This is the **server** of BearFunds ("Sweet Savings For Families") — the backend that introduces real authentication, multi-family tenancy, and server-side secrets. The **client repo** (React 19 + TS + Vite, offline-first) and a **brain vault** holding the decisions and synthesis are sibling checkouts; their paths are machine-specific and recorded in the brain's `CLAUDE Environments.md`. This repo is **scaffolded and DEPLOYED** (live since 2026-06-17): a Supabase project under `supabase/` (migrations 0001-0012 + RLS policies + the `api` data Edge Function and the `parse-receipt` AI Edge Function) plus `contracts/` (the canonical Schema Contract). The design it implements is the brain's [[BearFunds Server Architecture]] (Q6).
 
 ## Read these first (in order)
 
@@ -26,7 +26,7 @@ This is the **server** of BearFunds ("Sweet Savings For Families") — the backe
 
 ## Critical guardrails
 
-- **Operator runs commands in PowerShell (Windows), not bash.** Write every operator-facing hand-off command (git, npm, builds, tests, curl, file ops) in PowerShell syntax (`Copy-Item`/`copy` not `cp`, `$env:VAR=...` not `export`, backtick line-continuation, `;`/newlines not `&&`, `Invoke-RestMethod`/`curl.exe` not bare `curl`). The Linux-sandbox commands Claude runs itself stay bash. (Brain CLAUDE.md convention, v1.6.)
+- **The operator has TWO machines (Windows/PowerShell and macOS/zsh) - detect before writing a hand-off command.** Key on the repo root path: `D:\` is Windows, `/Users/arts-mac/` is macOS, anything else means stop and ask. Dialects and paths are in the brain's `CLAUDE Environments.md`. The Linux-sandbox commands Claude runs itself stay bash on every machine. (Brain CLAUDE.md convention, v1.48; was PowerShell-only v1.6 to v1.47.)
 - **Coverage ratchet.** Every bug, feature, or contract/tenancy change is a test opportunity: a bug fix lands with the regression test that would have caught it (fails before, passes after); a feature or changed flow lands with new or extended tests (incl. an RLS-isolation test for any tenant-table change); and the coverage question is answered explicitly (tests added, or a one-line reason none were warranted) before the work is "done". (Brain CLAUDE.md convention, v1.8; how-to in the brain Testing Methodology.)
 - **Never** write secrets into the repo or commits; **never** overwrite `.env*`. New key needed → say so in chat.
 - **Never** change the wire shape implicitly — `2_SCHEMA_CONTRACT.xml` changes are deliberate, versioned, and propagated to the client. When a slice includes an operator-applied contract bump, stage `2_SCHEMA_CONTRACT.xml` with the slice's code in the same commit - it is part of the slice, not a follow-up.
@@ -36,7 +36,7 @@ This is the **server** of BearFunds ("Sweet Savings For Families") — the backe
 
 ## Relationship to the brain (decisions live there, not here)
 
-The **BearFunds brain vault** (separate repo; at `D:\Projects\Brains\BearFunds`) owns the decisions, the maps, and the decision trail. This repo owns the runtime and (now) the canonical Schema Contract. When a "why" is needed, it lives in the brain.
+The **BearFunds brain vault** (separate repo; path per machine in its `CLAUDE Environments.md`) owns the decisions, the maps, and the decision trail. This repo owns the runtime and (now) the canonical Schema Contract. When a "why" is needed, it lives in the brain.
 
 Brain Reference docs (under `Areas/BearFunds/`):
 - `Reference/BearFunds Server Architecture.md` — the design this repo implements (datastore, auth, tenancy, contract handling, migration path).
@@ -63,4 +63,4 @@ Stale-mount caveat: the sandbox's view of files freshly edited on the Windows si
 
 
 
-Execution-environment boundary (codified 2026-06-10): the Cowork sandbox is Linux with no browser and an allowlisted network. Proven sandbox-safe here: Postgres 16 RLS-isolation suites and pure-Node action/validation harnesses. Operator-side: `supabase functions serve` / live-function E2E, Deno-native test runs (deno.land is network-blocked), and anything that builds or drives the client app (its Windows `node_modules` cannot execute on Linux - see the client CLAUDE.md). Never `npm install` onto a Windows-mounted repo from the sandbox.
+Execution-environment boundary (codified 2026-06-10): the Cowork sandbox is Linux with no browser and an allowlisted network. Proven sandbox-safe here: Postgres 16 RLS-isolation suites and pure-Node action/validation harnesses. Operator-side: `supabase functions serve` / live-function E2E, Deno-native test runs (deno.land is network-blocked), and anything that builds or drives the client app (its `node_modules` is built for the operator's platform and cannot execute on Linux either way - see the client CLAUDE.md). Never `npm install` onto a mounted repo from the sandbox.
