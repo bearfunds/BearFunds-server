@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<!-- Canonical: BearFunds-server · v1.19
+<!-- Canonical: BearFunds-server · v1.20
   This repo is the canonical home for the shared client<->server Schema Contract
   (re-home decided in the brain's Sources of Truth, 2026-06-01; executed 2026-06-02).
   It is NOT casually editable. Any change is a deliberate version bump with a one-line
@@ -34,7 +34,12 @@
   v1.19 (ADDITIVE - ignored categories): the budgets `enc` envelope carries an optional
   `ignored_category_ids` (String[]): the categories a Budget deliberately does not watch.
   The server stores `enc` verbatim and reads none of it - no migration, no policy, no
-  server code. Absent on read = nothing ignored. -->
+  server code. Absent on read = nothing ignored.
+  v1.20 (ADDITIVE - provenance): `imported_from` joins the TRANSACTIONS and STAGED_TRANSACTIONS
+  envelopes. Envelope-only, so no column, no migration and no server change: the field is written,
+  read and rendered entirely on device. It is a RENDERED STRING rather than a structured value, so
+  filtering by source KIND is not possible without a later migration that re-parses it. Optional and
+  permanently so - absence means the row was entered by hand. -->
 <SchemaContract version="1.19">
     <Meta>
         <Description>Immutable Source of Truth for Backend API and Database Schema</Description>
@@ -115,7 +120,7 @@
                     description="ISO YYYY-MM-DD" />
             <Column key="enc"
                     type="String"
-                    description="Opaque encrypted envelope 'v1.{iv}.{ct}'. Plaintext JSON inside (client-only): { amount: Number (absolute value), description: String, tags: String[] (uppercase convention) }." />
+                    description="Opaque encrypted envelope 'v1.{iv}.{ct}'. Plaintext JSON inside (client-only): { amount: Number (absolute value), description: String, tags: String[] (uppercase convention), imported_from: String (OPTIONAL, v1.20 - where the row came from, in words: a file name for an import, a sentence naming the feed and time for a future sync. Written once by whatever created the row and never edited. ABSENT means the transaction was entered by hand: every row written before v1.20 opens without it, permanently, so a reader must never render a placeholder in its place) }." />
             <Column key="currency"
                     type="String"
                     description="ISO (EUR, USD)" />
@@ -262,7 +267,7 @@
                     description="ISO YYYY-MM-DD when resolved; may be empty/unparsed while staged." />
             <Column key="enc"
                     type="String"
-                    description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { amount: String (RAW import text; parsed to Number on promotion), description: String, tags: String[], source_wallet: String, source_category: String, source_name: String, source_row: Object (the full original import row keyed by source header) }." />
+                    description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { amount: String (RAW import text; parsed to Number on promotion), description: String, tags: String[], source_wallet: String, source_category: String, source_name: String, source_row: Object (the full original import row keyed by source header), imported_from: String (OPTIONAL, v1.20 - the staged half of the transaction field of the same name; captured when the file is PARSED and copied onto the transaction on promotion, so provenance survives the staging firewall) }." />
             <Column key="currency"
                     type="String"
                     description="ISO code; nullable until derived from the mapped wallet." />

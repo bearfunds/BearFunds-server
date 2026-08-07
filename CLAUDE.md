@@ -7,7 +7,7 @@ This is the **server** of BearFunds ("Sweet Savings For Families") — the backe
 ## Read these first (in order)
 
 1. **`0_AI_INSTRUCTIONS.md`** — the engineering protocol. The canonical working discipline (Impact Analysis → Approval Lock → Test-first → Verify), adapted for server work (contract bumps, tenancy, RLS). Read it fully and follow it exactly. It is authoritative over this file if they ever disagree.
-2. **`contracts/2_SCHEMA_CONTRACT.xml`** — the backend API + DB contract (v1.19 at last update; the file's `Canonical: BearFunds-server · vX.Y` header line is the live version). **This repo is its canonical home** (the producer owns the interface; decided in the brain's Sources of Truth, 2026-06-01). It is a *shared* client↔server interface, so changes are deliberate version bumps that the operator drops into the client — never casual edits.
+2. **`contracts/2_SCHEMA_CONTRACT.xml`** — the backend API + DB contract (v1.20 at last update; the file's `Canonical: BearFunds-server · vX.Y` header line is the live version). **This repo is its canonical home** (the producer owns the interface; decided in the brain's Sources of Truth, 2026-06-01). It is a *shared* client↔server interface, so changes are deliberate version bumps that the operator drops into the client — never casual edits.
 
 ## The working loop (summary — `0_AI_INSTRUCTIONS.md` is canonical)
 
