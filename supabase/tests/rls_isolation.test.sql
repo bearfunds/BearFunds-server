@@ -487,6 +487,91 @@ do $t$ begin
 end $t$;
 reset role; reset request.jwt.claims;
 
+-- ============ import_mappings: tenancy + registration (v1.22) ============
+-- The family's memory of which source column header maps to which import field. Everything
+-- meaningful rides `enc`; this table has no plaintext columns beyond the scaffolding, so the
+-- asserts below are about ISOLATION and REGISTRATION rather than about any payload.
+
+-- Alice writes one with family_id omitted -> it must be server-derived to her family.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+insert into public.import_mappings (id, enc) values ('im_a1', 'v1.iv_im_a1.ct_alice_date');
+do $t$ begin
+  assert (select family_id from public.import_mappings where id = 'im_a1') = (select family_id from fam where who = 'A'),
+         'a new import mapping must be scoped to the Alice family by the trigger, not by the client';
+  assert (select count(*) from public.import_mappings) = 1, 'Alice sees exactly her own mapping';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- Bob must not see it, must not be able to read it by id, and must not be able to write into
+-- her family by naming it. The third is the one that matters: the first two are SELECT
+-- filtering, and only the WITH CHECK half proves a forged family_id is refused.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert (select count(*) from public.import_mappings) = 0, 'Bob sees NO import mappings of Alice';
+  assert (select count(*) from public.import_mappings where id = 'im_a1') = 0,
+         'and cannot reach hers by naming her id directly';
+end $t$;
+-- A FORGED family_id IS OVERWRITTEN, NOT REFUSED, and the distinction is worth an explicit
+-- assert rather than an exception test. set_family_id() forces every inserted row onto the
+-- CALLER's family and ignores whatever the client sent (0001), so the insert succeeds and
+-- lands harmlessly in Bob's family. A test asserting "denied" would pin a mechanism this
+-- system deliberately does not use, and would go red against correct code - which is exactly
+-- what it did when this block was first written. The property that matters is where the row
+-- ENDS UP, and that is what is asserted here, mirroring the wallets forge earlier in this file.
+insert into public.import_mappings (id, family_id, enc)
+  values ('im_b_forge', (select family_id from fam where who = 'A'), 'v1.iv_im_b.ct_bob_amount');
+do $t$ begin
+  assert (select family_id from public.import_mappings where id = 'im_b_forge') = (select family_id from fam where who = 'B'),
+         'a forged family_id on import_mappings must be overwritten to the Bob family';
+  assert (select count(*) from public.import_mappings) = 1,
+         'and Bob still sees exactly one mapping - his own, never Alice''s';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- And nothing crossed the fence: Alice is untouched by Bob's attempt.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+do $t$ begin
+  assert (select count(*) from public.import_mappings) = 1, 'Alice still has exactly her own mapping';
+  assert (select enc from public.import_mappings where id = 'im_a1') = 'v1.iv_im_a1.ct_alice_date',
+         'and its payload is unchanged';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- import_mappings must be REGISTERED in family_version() (v1.22) - the same silent break
+-- budgets pins above: omit it from the hardcoded union and a device whose ONLY change is a
+-- remembered mapping is told "nothing changed" and never syncs, with no error anywhere.
+-- CONTROL first, so the assert that follows is one that can actually fail.
+-- THE PROBE TIMESTAMP MUST SIT ABOVE EVERY EARLIER FORGE IN THIS FILE, which is why it is
+-- 2100 and not the next number down. Alice's wallet is forged to 2099 and Bob's budget to
+-- 2098, so a probe at 2097 makes this control assert that Bob is below a time he is already
+-- past - and it goes red against a perfectly correct schema. A forged-future timestamp is a
+-- shared resource in a single-transaction suite, not a local choice.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert public.family_version() < '2100-01-01T00:00:00Z'::timestamptz,
+         'CONTROL: Bob version is below the import_mappings probe timestamp before the forge';
+end $t$;
+reset role; reset request.jwt.claims;
+
+set session_replication_role = replica;
+update public.import_mappings set updated_at = '2100-01-01T00:00:00Z' where id = 'im_b_forge';
+set session_replication_role = origin;
+
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert public.family_version() = '2100-01-01T00:00:00Z'::timestamptz,
+         'an import_mappings row MUST move family_version() (import_mappings registered in the union)';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- And the forge stays on Bob's side of the fence.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+do $t$ begin
+  assert public.family_version() <> '2100-01-01T00:00:00Z'::timestamptz,
+         'Alice version does NOT see Bob import_mappings forge (per-family isolation holds for the new table)';
+end $t$;
+reset role; reset request.jwt.claims;
+
 rollback;
 \echo '================================'
 \echo 'RLS ISOLATION TESTS: ALL PASSED'

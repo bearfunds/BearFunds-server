@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<!-- Canonical: BearFunds-server · v1.21
+<!-- Canonical: BearFunds-server · v1.22
   This repo is the canonical home for the shared client<->server Schema Contract
   (re-home decided in the brain's Sources of Truth, 2026-06-01; executed 2026-06-02).
   It is NOT casually editable. Any change is a deliberate version bump with a one-line
@@ -51,12 +51,29 @@
   locally as max+1 collides when two devices each import a file. Optional and permanently so - a row
   written before v1.21 opens without them, and an absent `source_index` means UNKNOWN rather than
   position zero, so such rows sort after every stamped one. Neither field is copied onto the
-  transaction on promotion: a promoted row is no longer part of a file. -->
-<SchemaContract version="1.21">
+  transaction on promotion: a promoted row is no longer part of a file.
+  v1.22 (ADDITIVE - import mapping memory): new tenant table `IMPORT_MAPPINGS`, the family's
+  memory of which source column header maps to which import field, so a bank's file mapped once is
+  mapped automatically next time. Synced across the family: two people importing from the same bank
+  should not each teach the app the same thing. WHY THIS PERSISTS WHEN THE OTHER IMPORT MAPPINGS DID
+  NOT: the client's per-value mappings (wallet, category, name) were deleted because each stored a
+  RECORD ID that could name a deleted record, and the user found out only when a step rendered blank.
+  This maps to a FIELD NAME from a closed set, which cannot go stale that way. THE VERDICT IS A UNION,
+  not a nullable field - "this column is ignored" is worth as much as "this column is the date", since
+  it is what stops a reference-number column being re-proposed monthly; on the client it collapses two
+  parallel maps previously held mutually exclusive by hand. ENTIRELY ENCRYPTED: a bank's column names
+  describe the account, so the table has NO plaintext columns beyond the tenancy and sync scaffolding.
+  CONSEQUENCE, STATED DELIBERATELY: the server cannot dedupe or index on the header, so DEDUP IS THE
+  CLIENT'S JOB - and because ids are random, two devices mapping the same header while offline will
+  create two rows. That is expected. Convergence must need no coordination: newest `updated_at`, ties
+  broken by the lexicographically smallest id, loser tombstoned. A deterministic id (a digest of the
+  header) was rejected: a plain hash of "date" or "amount" falls to a wordlist, which would publish the
+  shape of a family's bank file to a server that is not allowed to read it. -->
+<SchemaContract version="1.22">
     <Meta>
         <Description>Immutable Source of Truth for Backend API and Database Schema</Description>
         <Usage>Paste this into the AI Context before generating any API or Data Fetching code.</Usage>
-        <Canonical>BearFunds-server · v1.21</Canonical>
+        <Canonical>BearFunds-server · v1.22</Canonical>
     </Meta>
     <Protocol>
         <Rule name="Endpoint">Single Entry Point (one POST endpoint). RESTful routes (GET /transactions) DO NOT exist.</Rule>
@@ -304,6 +321,23 @@
             <Column key="status"
                     type="String"
                     description="'cleared' | 'pending'; the transaction status carried through to the promoted row." />
+        </Table>
+        <Table name="IMPORT_MAPPINGS"
+               key="IMPORT_MAPPINGS">
+            <Column key="id"
+                    type="String"
+                    description="Primary Key. Random, minted on the creating device. Deliberately NOT derived from the header: a digest of a low-entropy string like 'date' is reversible by wordlist, and deriving it is the one thing that would let the server correlate two families' bank files. Convergence is by client-side dedup on the decrypted header, never by id construction." />
+            <Field name="enc" type="String" nullable="false"
+                    description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { header: String (the source column header exactly as the file spelled it, kept for display), header_norm: String (the normalised key the memory matches on - lowercased, non-alphanumerics stripped, by the SAME normaliser the suggestion fallback uses, so the two can never disagree about what counts as the same column), verdict: String (either a target field name from the client's closed TARGET_FIELDS set, or the literal 'ignored' - a union, because remembering that a column is deliberately skipped is worth exactly as much as remembering what it maps to) }." />
+            <Column key="updated_at"
+                    type="String"
+                    description="Server-managed ISO instant. Also the dedup tiebreaker's first key: the newest row for a given header_norm wins, ties broken by the lexicographically smallest id." />
+            <Column key="deleted"
+                    type="Boolean"
+                    description="Soft-delete tombstone. A duplicate losing the dedup is tombstoned rather than removed, so every device converges on the same survivor without coordinating." />
+            <Column key="is_immutable"
+                    type="Boolean"
+                    description="Standard tenant-table flag; unused by this table today." />
         </Table>
     </DatabaseSchema>
 </SchemaContract>
