@@ -14,9 +14,21 @@
 // inside the envelope, so the server can no longer read a family's cadence, currency, or a
 // one-off's exact date range. Budget rows are WIPED by migration 0017 (alpha; no user data).
 
+// v1.22 (ADDITIVE): IMPORT_MAPPINGS - the family's memory of which source column header maps to
+// which import field. A pure ENC table: the header, its normalised key and the verdict all ride the
+// envelope, so there is no plaintext surface at all beyond the tenancy and sync scaffolding.
+//
+// THIS LIST IS THE THIRD HAND-MAINTAINED REGISTER A NEW COLLECTION HAS TO JOIN, AND IT IS THE ONE
+// NOTHING WALKS YOU TO. The client's core/collections.ts drives four sites by compile error; its
+// `collectionsToUpdate` is documented as the trap the compiler misses. This file is a fourth, in a
+// different repo, reachable from neither - and on 2026-08-09 slice 6 shipped the migration, the RLS
+// policy, the isolation test, the contract XML and the whole client sync layer WITHOUT it. The
+// symptom was not a missing feature: `validation.ts` throws on an unknown table, so the entire
+// pull aborted and EVERY collection stopped syncing for any client build that knew the name.
+// Guarded now by contractTables.test.ts, which derives this set from the contract XML.
 export type LogicalTable =
   | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "WALLETS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS"
-  | "BUDGETS";
+  | "BUDGETS" | "IMPORT_MAPPINGS";
 
 export const PHYSICAL: Record<LogicalTable, string> = {
   TRANSACTIONS: "transactions",
@@ -27,6 +39,7 @@ export const PHYSICAL: Record<LogicalTable, string> = {
   MEMBERS: "members",
   STAGED_TRANSACTIONS: "staged_transactions",
   BUDGETS: "budgets",
+  IMPORT_MAPPINGS: "import_mappings",
 };
 
 // Server-managed / client-derived keys: silently removed from any inbound row.
@@ -79,6 +92,15 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
   BUDGETS: new Set([
     ...GLOBAL_WRITABLE,
     "period_type", "kind", "enc",
+  ]),
+  // IMPORT_MAPPINGS is a PURE enc table - the only one. A bank's column names describe the account,
+  // so the header, the normalised key and the verdict are all user data and none of them has a
+  // plaintext column to be written to. Nothing is added here "for debuggability" the way BUDGETS
+  // keeps `kind` and `period_type`: there is no coarse, insensitive fact about a remembered mapping
+  // worth publishing to the server, and a column added later to make one visible would be a
+  // privacy decision rather than a convenience.
+  IMPORT_MAPPINGS: new Set([
+    ...GLOBAL_WRITABLE, "enc",
   ]),
 };
 
