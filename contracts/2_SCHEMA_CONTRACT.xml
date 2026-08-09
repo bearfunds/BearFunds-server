@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<!-- Canonical: BearFunds-server · v1.20
+<!-- Canonical: BearFunds-server · v1.21
   This repo is the canonical home for the shared client<->server Schema Contract
   (re-home decided in the brain's Sources of Truth, 2026-06-01; executed 2026-06-02).
   It is NOT casually editable. Any change is a deliberate version bump with a one-line
@@ -39,12 +39,24 @@
   envelopes. Envelope-only, so no column, no migration and no server change: the field is written,
   read and rendered entirely on device. It is a RENDERED STRING rather than a structured value, so
   filtering by source KIND is not possible without a later migration that re-parses it. Optional and
-  permanently so - absence means the row was entered by hand. -->
-<SchemaContract version="1.19">
+  permanently so - absence means the row was entered by hand. 
+  v1.21 (ADDITIVE - arrival order): `source_index` (Number) and `batch_at` (String) join the
+  STAGED_TRANSACTIONS envelope. Envelope-only, so no column, no migration and no server change: the
+  server stores `enc` verbatim and never orders staged rows - the whole import review lives on the
+  device. TWO FIELDS BECAUSE ONE CANNOT SAY IT: `source_index` is a row's 0-based position in its
+  file, and "import more" appends a second file, so row 0 of the second batch is not a peer of row 0
+  of the first; `batch_at` is when that file was staged, stamped once per batch and never edited.
+  Nothing existing carries it - `batch_id` is a UUID and `updated_at` mutates on every edit. A single
+  monotonic ordinal was rejected instead of the pair because staged rows SYNC: an ordinal minted
+  locally as max+1 collides when two devices each import a file. Optional and permanently so - a row
+  written before v1.21 opens without them, and an absent `source_index` means UNKNOWN rather than
+  position zero, so such rows sort after every stamped one. Neither field is copied onto the
+  transaction on promotion: a promoted row is no longer part of a file. -->
+<SchemaContract version="1.21">
     <Meta>
         <Description>Immutable Source of Truth for Backend API and Database Schema</Description>
         <Usage>Paste this into the AI Context before generating any API or Data Fetching code.</Usage>
-        <Canonical>BearFunds-server · v1.19</Canonical>
+        <Canonical>BearFunds-server · v1.21</Canonical>
     </Meta>
     <Protocol>
         <Rule name="Endpoint">Single Entry Point (one POST endpoint). RESTful routes (GET /transactions) DO NOT exist.</Rule>
@@ -267,7 +279,7 @@
                     description="ISO YYYY-MM-DD when resolved; may be empty/unparsed while staged." />
             <Column key="enc"
                     type="String"
-                    description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { amount: String (RAW import text; parsed to Number on promotion), description: String, tags: String[], source_wallet: String, source_category: String, source_name: String, source_row: Object (the full original import row keyed by source header), imported_from: String (OPTIONAL, v1.20 - the staged half of the transaction field of the same name; captured when the file is PARSED and copied onto the transaction on promotion, so provenance survives the staging firewall) }." />
+                    description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { amount: String (RAW import text; parsed to Number on promotion), description: String, tags: String[], source_wallet: String, source_category: String, source_name: String, source_row: Object (the full original import row keyed by source header), imported_from: String (OPTIONAL, v1.20 - the staged half of the transaction field of the same name; captured when the file is PARSED and copied onto the transaction on promotion, so provenance survives the staging firewall), source_index: Number (OPTIONAL, v1.21 - the row's 0-based position in the file it came from), batch_at: String (OPTIONAL, v1.21 - ISO instant the batch was staged, one value shared by every row of a file, never edited afterwards; ordered with source_index it is the order a reviewer's grid opens in. ABSENT means unknown rather than first: a row written before v1.21 sorts after every row that carries these, never at the top of a file it was not part of) }." />
             <Column key="currency"
                     type="String"
                     description="ISO code; nullable until derived from the mapped wallet." />
