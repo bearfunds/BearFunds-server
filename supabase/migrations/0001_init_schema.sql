@@ -32,7 +32,7 @@ create table if not exists public.transactions (
   category_id   text,
   sub_category  text,
   entity_id     text,
-  wallet_id     text,
+  account_id     text,
   member_id     text,
   description   text,
   tags          text,
@@ -55,7 +55,7 @@ create table if not exists public.categories (
   is_immutable    boolean not null default false
 );
 
-create table if not exists public.wallets (
+create table if not exists public.accounts (
   id            text primary key,
   family_id     uuid not null references public.families(id) on delete cascade,
   name          text,
@@ -101,7 +101,7 @@ create table if not exists public.members (
 -- Delta-sync read path hits (family_id, updated_at) on every table.
 create index if not exists transactions_family_updated_idx on public.transactions (family_id, updated_at);
 create index if not exists categories_family_updated_idx   on public.categories   (family_id, updated_at);
-create index if not exists wallets_family_updated_idx       on public.wallets       (family_id, updated_at);
+create index if not exists accounts_family_updated_idx       on public.accounts       (family_id, updated_at);
 create index if not exists entities_family_updated_idx      on public.entities      (family_id, updated_at);
 create index if not exists members_family_updated_idx       on public.members       (family_id, updated_at);
 
@@ -168,7 +168,7 @@ $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['transactions','categories','wallets','entities','members']
+  foreach t in array array['transactions','categories','accounts','entities','members']
   loop
     execute format('create trigger %I_set_updated_at before insert or update on public.%I
                     for each row execute function public.set_updated_at();', t, t);

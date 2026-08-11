@@ -2,7 +2,7 @@
 // table mapping, and per-table writable column allowlists (snake_case logical keys).
 // Keys the client must never set (tenancy/sync-internal) are stripped, not errored.
 // v1.14 (RLE): sensitive fields ride an opaque client-encrypted `enc` envelope on
-// TRANSACTIONS / WALLETS / ENTITIES / STAGED_TRANSACTIONS; their plaintext keys are
+// TRANSACTIONS / ACCOUNTS / ENTITIES / STAGED_TRANSACTIONS; their plaintext keys are
 // REMOVED from the allowlists so the server rejects any plaintext write (enforced,
 // not conventional). Categories/subcategories/members stay plaintext by design.
 // v1.16 (additive): BUDGETS - a synced informational layer over transactions. It is an
@@ -27,14 +27,14 @@
 // pull aborted and EVERY collection stopped syncing for any client build that knew the name.
 // Guarded now by contractTables.test.ts, which derives this set from the contract XML.
 export type LogicalTable =
-  | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "WALLETS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS"
+  | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "ACCOUNTS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS"
   | "BUDGETS" | "IMPORT_MAPPINGS";
 
 export const PHYSICAL: Record<LogicalTable, string> = {
   TRANSACTIONS: "transactions",
   CATEGORIES: "categories",
   SUBCATEGORIES: "subcategories",
-  WALLETS: "wallets",
+  ACCOUNTS: "accounts",
   ENTITIES: "entities",
   MEMBERS: "members",
   STAGED_TRANSACTIONS: "staged_transactions",
@@ -55,7 +55,7 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
   TRANSACTIONS: new Set([
     ...GLOBAL_WRITABLE,
     "date", "currency", "type", "category_id", "sub_category_id",
-    "entity_id", "wallet_id", "member_id", "status", "enc",
+    "entity_id", "account_id", "member_id", "status", "enc",
   ]),
   CATEGORIES: new Set([
     ...GLOBAL_WRITABLE, "name", "type", "icon", "color", "description",
@@ -63,7 +63,7 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
   SUBCATEGORIES: new Set([
     ...GLOBAL_WRITABLE, "category_id", "name", "is_default",
   ]),
-  WALLETS: new Set([
+  ACCOUNTS: new Set([
     ...GLOBAL_WRITABLE, "currency", "icon", "color", "is_default", "enc",
   ]),
   ENTITIES: new Set([
@@ -76,7 +76,7 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
   STAGED_TRANSACTIONS: new Set([
     ...GLOBAL_WRITABLE,
     "batch_id", "date", "currency", "type", "category_id", "sub_category_id",
-    "entity_id", "wallet_id", "member_id", "status", "enc",
+    "entity_id", "account_id", "member_id", "status", "enc",
   ]),
   // BUDGETS is an ENC table, and at v1.17 it is very nearly ONLY an enc table. The whole plan -
   // name, target, Areas, category + account membership, the period bounds, the recurring line id -

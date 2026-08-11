@@ -17,7 +17,7 @@
 -- both move INSIDE the envelope at no functional cost. What is left plaintext is deliberately
 -- inert: `kind` (a single constant) and `period_type` (a coarse cadence), kept for debuggability.
 --
--- The envelope now carries: { line_id, live, period_start, period_end, target?, wallet_ids[],
+-- The envelope now carries: { line_id, live, period_start, period_end, target?, account_ids[],
 -- areas[{ id, name, amount, category_ids[] }], adjustments[{ area_id, amount }], name, note? }.
 --
 -- CONSEQUENCE, stated deliberately: the one-category-per-AREA rule cannot be a database constraint

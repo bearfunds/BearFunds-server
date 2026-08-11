@@ -100,7 +100,7 @@ as $$
     select max(updated_at) as v from public.transactions        where family_id = public.auth_family_id()
     union all select max(updated_at)  from public.categories          where family_id = public.auth_family_id()
     union all select max(updated_at)  from public.subcategories       where family_id = public.auth_family_id()
-    union all select max(updated_at)  from public.wallets             where family_id = public.auth_family_id()
+    union all select max(updated_at)  from public.accounts             where family_id = public.auth_family_id()
     union all select max(updated_at)  from public.entities            where family_id = public.auth_family_id()
     union all select max(updated_at)  from public.members             where family_id = public.auth_family_id()
     union all select max(updated_at)  from public.staged_transactions where family_id = public.auth_family_id()

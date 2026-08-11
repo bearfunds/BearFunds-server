@@ -20,7 +20,7 @@ function fakeDb() {
 
 Deno.test("strips server-derived & internal keys, keeps writable keys", () => {
   const req = parseRequest({
-    action: "batchUpsert", table: "WALLETS",
+    action: "batchUpsert", table: "ACCOUNTS",
     rows: [{ id: "w1", enc: "v1.aaa.bbb", currency: "EUR", family_id: "forged", user_id: "x", updated_at: "2000", isDirty: true }],
   });
   if (req.action !== "batchUpsert") throw new Error("wrong action");
@@ -34,8 +34,8 @@ Deno.test("RLE: plaintext sensitive keys are rejected per table", () => {
     ["TRANSACTIONS", { id: "t1", amount: 5 }],
     ["TRANSACTIONS", { id: "t1", description: "memo" }],
     ["TRANSACTIONS", { id: "t1", tags: "[\"A\"]" }],
-    ["WALLETS", { id: "w1", name: "Main" }],
-    ["WALLETS", { id: "w1", description: "d" }],
+    ["ACCOUNTS", { id: "w1", name: "Main" }],
+    ["ACCOUNTS", { id: "w1", description: "d" }],
     ["ENTITIES", { id: "e1", name: "ACME" }],
     ["ENTITIES", { id: "e1", aliases: "[]" }],
     ["ENTITIES", { id: "e1", match_patterns: "[]" }],
@@ -50,7 +50,7 @@ Deno.test("RLE: plaintext sensitive keys are rejected per table", () => {
     ["BUDGETS", { id: "b1", target: 2000 }],
     ["BUDGETS", { id: "b1", note: "new coffee machine" }],
     ["BUDGETS", { id: "b1", category_ids: "[\"c1\"]" }],
-    ["BUDGETS", { id: "b1", wallet_ids: "[\"w1\"]" }],
+    ["BUDGETS", { id: "b1", account_ids: "[\"w1\"]" }],
     ["BUDGETS", { id: "b1", areas: "[]" }],
     ["BUDGETS", { id: "b1", line_id: "line_1" }],
     // The v1 plaintext columns. These are the keys a STALE DEPLOYED CLIENT would send, and the
@@ -72,7 +72,7 @@ Deno.test("RLE: plaintext sensitive keys are rejected per table", () => {
 });
 
 Deno.test("RLE: enc is writable only on envelope tables", () => {
-  for (const table of ["TRANSACTIONS", "WALLETS", "ENTITIES", "STAGED_TRANSACTIONS", "BUDGETS"]) {
+  for (const table of ["TRANSACTIONS", "ACCOUNTS", "ENTITIES", "STAGED_TRANSACTIONS", "BUDGETS"]) {
     const req = parseRequest({ action: "batchUpsert", table, rows: [{ id: "x1", enc: "v1.i.c" }] });
     if (req.action !== "batchUpsert") throw new Error("wrong action");
     assertEquals(req.rows[0], { id: "x1", enc: "v1.i.c" });
@@ -88,7 +88,7 @@ Deno.test("RLE: enc is writable only on envelope tables", () => {
 
 Deno.test("rejects unknown row key (strict contract)", () => {
   assertThrows(
-    () => parseRequest({ action: "batchCreate", table: "WALLETS", rows: [{ id: "w1", bogus: 1 }] }),
+    () => parseRequest({ action: "batchCreate", table: "ACCOUNTS", rows: [{ id: "w1", bogus: 1 }] }),
     ValidationError, "Unknown key 'bogus'",
   );
 });
@@ -113,13 +113,13 @@ Deno.test("SUBCATEGORIES: rejects unknown row key and read maps logical->physica
 });
 
 Deno.test("rejects unknown action and unknown table", () => {
-  assertThrows(() => parseRequest({ action: "delete", table: "WALLETS" }), ValidationError);
+  assertThrows(() => parseRequest({ action: "delete", table: "ACCOUNTS" }), ValidationError);
   assertThrows(() => parseRequest({ action: "read", table: "ACCOUNTS" }), ValidationError);
 });
 
 Deno.test("batchUpsert requires id; batchCreate does not", () => {
-  assertThrows(() => parseRequest({ action: "batchUpsert", table: "WALLETS", rows: [{ enc: "v1.i.c" }] }), ValidationError);
-  const ok = parseRequest({ action: "batchCreate", table: "WALLETS", rows: [{ enc: "v1.i.c", currency: "EUR" }] });
+  assertThrows(() => parseRequest({ action: "batchUpsert", table: "ACCOUNTS", rows: [{ enc: "v1.i.c" }] }), ValidationError);
+  const ok = parseRequest({ action: "batchCreate", table: "ACCOUNTS", rows: [{ enc: "v1.i.c", currency: "EUR" }] });
   assert(ok.action === "batchCreate");
 });
 
@@ -149,7 +149,7 @@ Deno.test("wipe is blocked outside test context, allowed inside", async () => {
 
 Deno.test("empty batches are no-ops", async () => {
   const { db, calls } = fakeDb();
-  assertEquals(await runAction(parseRequest({ action: "batchCreate", table: "WALLETS", rows: [] }), db, { isTest: false }), []);
+  assertEquals(await runAction(parseRequest({ action: "batchCreate", table: "ACCOUNTS", rows: [] }), db, { isTest: false }), []);
   assertEquals(calls.length, 0);
 });
 

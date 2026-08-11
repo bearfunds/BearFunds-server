@@ -38,12 +38,12 @@ do $$ begin
   assert (select count(*) from public.families) = 1, 'Alice must see only her own family';
 end $$;
 
--- Create a wallet with family_id omitted -> server-derived to Alice.
-insert into public.wallets (id, currency, enc) values ('w_a1', 'EUR', 'v1.iv_a1.ct_alice_eur');
+-- Create an account with family_id omitted -> server-derived to Alice.
+insert into public.accounts (id, currency, enc) values ('w_a1', 'EUR', 'v1.iv_a1.ct_alice_eur');
 do $$ begin
-  assert (select family_id from public.wallets where id = 'w_a1') = (select family_id from fam where who = 'A'),
-         'new wallet must be scoped to Alice family';
-  assert (select count(*) from public.wallets) = 1, 'Alice sees exactly her wallet';
+  assert (select family_id from public.accounts where id = 'w_a1') = (select family_id from fam where who = 'A'),
+         'new account must be scoped to Alice family';
+  assert (select count(*) from public.accounts) = 1, 'Alice sees exactly her account';
 end $$;
 
 reset role; reset request.jwt.claims;
@@ -52,22 +52,22 @@ reset role; reset request.jwt.claims;
 set role authenticated;
 set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
 
--- READ isolation: Bob cannot see Alice's wallet.
+-- READ isolation: Bob cannot see Alice's account.
 do $$ begin
-  assert (select count(*) from public.wallets) = 0, 'Bob must not see Alice wallet (read isolation)';
+  assert (select count(*) from public.accounts) = 0, 'Bob must not see Alice account (read isolation)';
 end $$;
 
 -- WRITE isolation: Bob's update of Alice's row hits nothing (row invisible).
-update public.wallets set enc = 'HACKED' where id = 'w_a1';
+update public.accounts set enc = 'HACKED' where id = 'w_a1';
 do $$ begin
-  assert not exists (select 1 from public.wallets where id = 'w_a1'), 'Alice wallet stays invisible to Bob';
+  assert not exists (select 1 from public.accounts where id = 'w_a1'), 'Alice account stays invisible to Bob';
 end $$;
 
 -- FORGERY: Bob inserts with Alice family_id in the body -> trigger forces it to Bob.
-insert into public.wallets (id, currency, family_id)
+insert into public.accounts (id, currency, family_id)
   values ('w_b_forge', 'USD', (select family_id from fam where who = 'A'));
 do $$ begin
-  assert (select family_id from public.wallets where id = 'w_b_forge') = (select family_id from fam where who = 'B'),
+  assert (select family_id from public.accounts where id = 'w_b_forge') = (select family_id from fam where who = 'B'),
          'forged family_id must be overwritten to Bob family';
 end $$;
 
@@ -75,25 +75,25 @@ reset role; reset request.jwt.claims;
 
 -- ============ Superuser: confirm Alice survived Bob entirely ============
 do $$ begin
-  assert (select enc from public.wallets where id = 'w_a1') = 'v1.iv_a1.ct_alice_eur', 'Alice wallet must be unchanged';
-  assert (select count(*) from public.wallets where family_id = (select family_id from fam where who = 'A')) = 1,
-         'Alice family still has exactly one wallet';
-  assert (select count(*) from public.wallets where family_id = (select family_id from fam where who = 'B')) = 1,
-         'Bob family has only the forged-then-corrected wallet';
+  assert (select enc from public.accounts where id = 'w_a1') = 'v1.iv_a1.ct_alice_eur', 'Alice account must be unchanged';
+  assert (select count(*) from public.accounts where family_id = (select family_id from fam where who = 'A')) = 1,
+         'Alice family still has exactly one account';
+  assert (select count(*) from public.accounts where family_id = (select family_id from fam where who = 'B')) = 1,
+         'Bob family has only the forged-then-corrected account';
 end $$;
 
 -- ============ updated_at is server-managed ============
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
-insert into public.wallets (id, currency, updated_at) values ('w_a2', 'EUR', '2000-01-01T00:00:00Z');
+insert into public.accounts (id, currency, updated_at) values ('w_a2', 'EUR', '2000-01-01T00:00:00Z');
 do $$ begin
-  assert (select updated_at from public.wallets where id = 'w_a2') > now() - interval '1 minute',
+  assert (select updated_at from public.accounts where id = 'w_a2') > now() - interval '1 minute',
          'updated_at must be overwritten to server now()';
 end $$;
 
 -- ============ family_id is immutable on update ============
-update public.wallets set family_id = (select family_id from fam where who = 'B') where id = 'w_a2';
+update public.accounts set family_id = (select family_id from fam where who = 'B') where id = 'w_a2';
 do $$ begin
-  assert (select family_id from public.wallets where id = 'w_a2') = (select family_id from fam where who = 'A'),
+  assert (select family_id from public.accounts where id = 'w_a2') = (select family_id from fam where who = 'A'),
          'family_id must not move families on update';
 end $$;
 reset role; reset request.jwt.claims;
@@ -439,10 +439,10 @@ end $t$;
 -- The `version` action returns max(updated_at) across the caller's tenant tables. The suite
 -- runs in ONE transaction, so now() (and every trigger-set updated_at) is frozen -- which
 -- would make Alice's and Bob's versions identical. To prove ISOLATION, forge a single
--- far-future updated_at on Alice's wallet with the updated_at trigger disabled
+-- far-future updated_at on Alice's account with the updated_at trigger disabled
 -- (session_replication_role=replica, superuser), then assert only Alice's version reflects it.
 set session_replication_role = replica;
-update public.wallets set updated_at = '2099-01-01T00:00:00Z' where id = 'w_a1';
+update public.accounts set updated_at = '2099-01-01T00:00:00Z' where id = 'w_a1';
 set session_replication_role = origin;
 
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
@@ -517,7 +517,7 @@ end $t$;
 -- lands harmlessly in Bob's family. A test asserting "denied" would pin a mechanism this
 -- system deliberately does not use, and would go red against correct code - which is exactly
 -- what it did when this block was first written. The property that matters is where the row
--- ENDS UP, and that is what is asserted here, mirroring the wallets forge earlier in this file.
+-- ENDS UP, and that is what is asserted here, mirroring the accounts forge earlier in this file.
 insert into public.import_mappings (id, family_id, enc)
   values ('im_b_forge', (select family_id from fam where who = 'A'), 'v1.iv_im_b.ct_bob_amount');
 do $t$ begin
@@ -542,7 +542,7 @@ reset role; reset request.jwt.claims;
 -- remembered mapping is told "nothing changed" and never syncs, with no error anywhere.
 -- CONTROL first, so the assert that follows is one that can actually fail.
 -- THE PROBE TIMESTAMP MUST SIT ABOVE EVERY EARLIER FORGE IN THIS FILE, which is why it is
--- 2100 and not the next number down. Alice's wallet is forged to 2099 and Bob's budget to
+-- 2100 and not the next number down. Alice's account is forged to 2099 and Bob's budget to
 -- 2098, so a probe at 2097 makes this control assert that Bob is below a time he is already
 -- past - and it goes red against a perfectly correct schema. A forged-future timestamp is a
 -- shared resource in a single-transaction suite, not a local choice.

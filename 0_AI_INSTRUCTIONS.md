@@ -50,7 +50,7 @@ Before writing any code, output a section titled `## Impact Analysis`:
 
 # 5. Coding Style Guidelines
 - **Tenant tables carry the global columns:** `id`, `family_id`, `updated_at` (server-managed, via trigger), `deleted` (soft delete), `is_immutable`. `isDirty` is a client-only flag and is never persisted server-side.
-- **One table per client collection:** `transactions`, `categories`, `wallets`, `entities`, `members`, plus the `families` tenancy root — mapping the brain's `Syncable` model 1:1.
+- **One table per client collection:** `transactions`, `categories`, `accounts`, `entities`, `members`, plus the `families` tenancy root — mapping the brain's `Syncable` model 1:1.
 - **Boundary validation:** every request payload is validated (snake_case, strict unknown-key rejection) before it touches the database; every response conforms to the contract's envelope.
 - **RLS per table:** every tenant table has an explicit policy scoped to the session's `family_id`. No table relies on application logic alone for isolation.
 - **Explicit > Implicit:** readable, verbose names over abbreviations. Keep functions pure where practical.

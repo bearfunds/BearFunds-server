@@ -1,5 +1,5 @@
 -- BearFunds server - composite (family_id, id) primary key ([Q20], forward-only).
--- Every family seeds IDENTICAL fixed ids (categories c001.., entities e001.., wallets,
+-- Every family seeds IDENTICAL fixed ids (categories c001.., entities e001.., accounts,
 -- deterministic sub ids), but the tenant tables used a GLOBAL `id` primary key - so the
 -- 2nd family to sync its seed collided on the PK, the upsert took ON CONFLICT DO UPDATE,
 -- and RLS denied updating another family's row (500). Re-key each tenant table on
@@ -15,7 +15,7 @@
 do $$
 declare t text;
 begin
-  foreach t in array array['transactions','categories','subcategories','wallets','entities','members','staged_transactions']
+  foreach t in array array['transactions','categories','subcategories','accounts','entities','members','staged_transactions']
   loop
     execute format('alter table public.%I drop constraint %I_pkey, add primary key (family_id, id);', t, t);
   end loop;

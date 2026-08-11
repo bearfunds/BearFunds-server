@@ -14,7 +14,7 @@
 -- retroactively and deleting one instance without deleting the series.
 --
 -- RLE (contract v1.15/v1.16): the entire meaningful payload rides the opaque `enc`
--- envelope -- { name, amount, note?, percent?, category_ids[], wallet_ids[] }. The server
+-- envelope -- { name, amount, note?, percent?, category_ids[], account_ids[] }. The server
 -- stores it verbatim and can never read inside it. CONSEQUENCE, stated deliberately: the
 -- one-category-per-Budget-per-period rule CANNOT be a database constraint (the membership
 -- is ciphertext); it is enforced client-side by core/budgetPolicy.ts with a unit matrix.
@@ -93,7 +93,7 @@ as $$
     select max(updated_at) as v from public.transactions        where family_id = public.auth_family_id()
     union all select max(updated_at)  from public.categories          where family_id = public.auth_family_id()
     union all select max(updated_at)  from public.subcategories       where family_id = public.auth_family_id()
-    union all select max(updated_at)  from public.wallets             where family_id = public.auth_family_id()
+    union all select max(updated_at)  from public.accounts             where family_id = public.auth_family_id()
     union all select max(updated_at)  from public.entities            where family_id = public.auth_family_id()
     union all select max(updated_at)  from public.members             where family_id = public.auth_family_id()
     union all select max(updated_at)  from public.staged_transactions where family_id = public.auth_family_id()
