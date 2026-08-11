@@ -3,6 +3,7 @@
 import { assert, assertEquals, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { parseRequest, ValidationError } from "./_shared/validation.ts";
 import { DbExecutor, runAction } from "./_shared/actions.ts";
+import { isLogicalTable } from "./_shared/contract.ts";
 
 // A fake executor that records calls and returns echo data.
 function fakeDb() {
@@ -112,9 +113,30 @@ Deno.test("SUBCATEGORIES: rejects unknown row key and read maps logical->physica
   assertEquals(calls[0].table, "subcategories");
 });
 
+// A NEGATIVE FIXTURE MUST NAME SOMETHING THE CONTRACT CAN NEVER DECLARE, AND A CONTROL PROVES IT.
+// The unknown-table arm needs a table that is absent, so its literal is a standing bet about what
+// the contract will never contain - and a rename can win that bet silently, because a sweep over
+// the OLD word cannot see a line the old word never appears on. On 2026-08-11 this arm read
+// "ACCOUNTS", which was absent when it was written and became a real table at contract v1.23, so
+// the assert could no longer fail. It surfaced only because the arm throws for one reason; the
+// sibling arm below survives on its ACTION being unknown and would have passed regardless.
+// The control is what makes the fixture self-reporting: promote either name into the union and it
+// goes red here, naming the cause, instead of quietly turning the assert into a formality.
+const ABSENT_TABLES = ["ACCOUNT", "NOT_A_TABLE"];
+
 Deno.test("rejects unknown action and unknown table", () => {
+  // CONTROL FIRST: these are still counter-examples. "ACCOUNT" is the near-miss singular of a real
+  // table, which is the shape most likely to become real; "NOT_A_TABLE" cannot.
+  for (const t of ABSENT_TABLES) {
+    assert(!isLogicalTable(t), `CONTROL: ${t} is absent from the registry, so the assert below can fail`);
+  }
+  assert(isLogicalTable("ACCOUNTS"), "CONTROL: a real table IS accepted, so the predicate discriminates");
+
+  // The action is unknown; the table is deliberately a REAL one, so this arm can only throw on the action.
   assertThrows(() => parseRequest({ action: "delete", table: "ACCOUNTS" }), ValidationError);
-  assertThrows(() => parseRequest({ action: "read", table: "ACCOUNTS" }), ValidationError);
+  for (const t of ABSENT_TABLES) {
+    assertThrows(() => parseRequest({ action: "read", table: t }), ValidationError);
+  }
 });
 
 Deno.test("batchUpsert requires id; batchCreate does not", () => {
