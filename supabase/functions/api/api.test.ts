@@ -42,12 +42,25 @@ Deno.test("RLE: plaintext sensitive keys are rejected per table", () => {
     ["STAGED_TRANSACTIONS", { id: "st1", amount: "-1,5" }],
     ["STAGED_TRANSACTIONS", { id: "st1", source_row: "{}" }],
     ["STAGED_TRANSACTIONS", { id: "st1", source_name: "x" }],
-    // BUDGETS (v1.16): name/amount/note AND the category+account membership all ride enc.
+    // BUDGETS (v1.17): the WHOLE plan rides enc - name, target, Areas, category + account
+    // membership, the period bounds AND the recurring line id. The only writable plaintext left is
+    // kind + period_type.
     ["BUDGETS", { id: "b1", name: "Groceries" }],
     ["BUDGETS", { id: "b1", amount: 400 }],
+    ["BUDGETS", { id: "b1", target: 2000 }],
     ["BUDGETS", { id: "b1", note: "new coffee machine" }],
     ["BUDGETS", { id: "b1", category_ids: "[\"c1\"]" }],
     ["BUDGETS", { id: "b1", wallet_ids: "[\"w1\"]" }],
+    ["BUDGETS", { id: "b1", areas: "[]" }],
+    ["BUDGETS", { id: "b1", line_id: "line_1" }],
+    // The v1 plaintext columns. These are the keys a STALE DEPLOYED CLIENT would send, and the
+    // rejection is exactly what makes that failure loud instead of silent - which is why the
+    // server and client ship in one coordinated deploy.
+    ["BUDGETS", { id: "b1", currency: "EUR" }],
+    ["BUDGETS", { id: "b1", template_id: "t1" }],
+    ["BUDGETS", { id: "b1", period_start: "2026-07-01" }],
+    ["BUDGETS", { id: "b1", period_end: "2026-07-31" }],
+    ["BUDGETS", { id: "b1", stopped_at: "2026-07-01" }],
   ];
   for (const [table, row] of cases) {
     assertThrows(

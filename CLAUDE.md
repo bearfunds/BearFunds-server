@@ -21,8 +21,8 @@ This is the **server** of BearFunds ("Sweet Savings For Families") — the backe
 - **API seam:** a single Edge Function that **honors the v1.16 Schema Contract** — one POST endpoint, action-based (`read`/`batchCreate`/`batchUpdate`/`batchUpsert`/`wipe`/`version`), snake_case logical keys, `{ status, data }` envelope. This keeps the client's `core/api/` layer almost unchanged (it swaps the shared bundle key for a Supabase session JWT).
 - **Datastore:** one table per client collection (`transactions`, `categories`, `subcategories`, `wallets`, `entities`, `members`, `staged_transactions`, `budgets`) + a `families` tenancy root, mapping the client's `Syncable` model 1:1, with server-managed `updated_at`, soft-delete `deleted`, and `is_immutable`.
 - **Tenancy/auth:** every tenant row carries a server-derived `family_id`, enforced by Postgres **RLS**; `FamilyMember.role` (`admin`/`member`) is server-enforced. Secrets (Gemini, JWT) live server-side, never in the client bundle.
-- A RESTful **v2** contract is deferred future work; honor v1.16 now.
-- **BUDGETS (v1.16)** is a tenant table like any other, with one property worth stating: its whole meaningful payload - name, amount, note AND the category/account membership - rides the `enc` envelope. The server therefore cannot enforce the one-category-per-Budget-per-period rule; the client owns it (`core/budgetPolicy.ts`, with a unit matrix). Utilization is computed on device from the ledger, never snapshotted.
+- A RESTful **v2** contract is deferred future work; honor the current v1.x contract now.
+- **BUDGETS** (since contract v1.16) is a tenant table like any other, with one property worth stating: its whole meaningful payload - name, amount, note AND the category/account membership - rides the `enc` envelope. The server therefore cannot enforce the one-category-per-Budget-per-period rule; the client owns it (`core/budgetPolicy.ts`, with a unit matrix). Utilization is computed on device from the ledger, never snapshotted.
 
 ## Edge-function webhooks (SQL-managed, not dashboard)
 
@@ -36,7 +36,6 @@ This is the **server** of BearFunds ("Sweet Savings For Families") — the backe
 
 ## Critical guardrails
 
-- **Operator runs commands in PowerShell (Windows), not bash.** Write every operator-facing hand-off command (git, npm, builds, tests, curl, file ops) in PowerShell syntax (`Copy-Item`/`copy` not `cp`, `$env:VAR=...` not `export`, backtick line-continuation, `;`/newlines not `&&`, `Invoke-RestMethod`/`curl.exe` not bare `curl`). The commands Claude runs itself stay bash. `supabase/tests/` ships a `.ps1` twin of every `.sh` runner for this reason.
 - **Coverage ratchet.** Every bug, feature, or contract/tenancy change is a test opportunity: a bug fix lands with the regression test that would have caught it (fails before, passes after); a feature or changed flow lands with new or extended tests (incl. an RLS-isolation test for any tenant-table change); and the coverage question is answered explicitly (tests added, or a one-line reason none were warranted) before the work is "done".
 - **Never** write secrets into the repo or commits; **never** overwrite `.env*`. New key needed → say so in chat.
 - **Never** change the wire shape implicitly — `contracts/2_SCHEMA_CONTRACT.xml` changes are deliberate, versioned, and propagated to the client. When a slice includes an operator-applied contract bump, stage the contract file with the slice's code in the same commit - it is part of the slice, not a follow-up.
