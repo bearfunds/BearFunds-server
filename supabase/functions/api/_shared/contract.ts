@@ -13,10 +13,14 @@
 // shrinks to kind + period_type - the period bounds, the line id and the entire plan move
 // inside the envelope, so the server can no longer read a family's cadence, currency, or a
 // one-off's exact date range. Budget rows are WIPED by migration 0017 (alpha; no user data).
+// v1.22 (additive): IMPORT_MAPPINGS - the family's memory of which source column header maps
+// to which import field. ENTIRELY opaque: no plaintext columns beyond the standard tenancy/
+// sync scaffolding, so its WRITABLE set is GLOBAL_WRITABLE + enc only, same shape as budgets
+// pre-0017 but with nothing left plaintext at all.
 
 export type LogicalTable =
   | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "WALLETS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS"
-  | "BUDGETS";
+  | "BUDGETS" | "IMPORT_MAPPINGS";
 
 export const PHYSICAL: Record<LogicalTable, string> = {
   TRANSACTIONS: "transactions",
@@ -27,6 +31,7 @@ export const PHYSICAL: Record<LogicalTable, string> = {
   MEMBERS: "members",
   STAGED_TRANSACTIONS: "staged_transactions",
   BUDGETS: "budgets",
+  IMPORT_MAPPINGS: "import_mappings",
 };
 
 // Server-managed / client-derived keys: silently removed from any inbound row.
@@ -80,10 +85,16 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
     ...GLOBAL_WRITABLE,
     "period_type", "kind", "enc",
   ]),
+  // IMPORT_MAPPINGS (v1.22): header / header_norm / verdict all ride enc. Nothing plaintext
+  // to write beyond the global set, so a plaintext 'header' or 'verdict' key is REJECTED
+  // (VALIDATION), not merely ignored - same enforcement style as budgets' enc surface.
+  IMPORT_MAPPINGS: new Set([
+    ...GLOBAL_WRITABLE, "enc",
+  ]),
 };
 
 export const ACTIONS = new Set([
-  "read", "batchCreate", "batchUpdate", "batchUpsert", "wipe", "version",
+  "read", "batchCreate", "batchUpdate", "batchUpsert", "wipe", "version", "deleteAccount",
 ]);
 
 export function isLogicalTable(t: unknown): t is LogicalTable {

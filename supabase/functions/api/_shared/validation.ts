@@ -32,7 +32,13 @@ export interface WipeRequest {
 export interface VersionRequest {
   action: "version";
 }
-export type ApiRequest = ReadRequest | RowsRequest | UpdatesRequest | WipeRequest | VersionRequest;
+// Irreversible, table-less: deletes the authenticated user (and their family, when they
+// are its last account-linked member). No table, no rows - same shape as version.
+export interface DeleteAccountRequest {
+  action: "deleteAccount";
+}
+export type ApiRequest =
+  | ReadRequest | RowsRequest | UpdatesRequest | WipeRequest | VersionRequest | DeleteAccountRequest;
 
 function requireObject(v: unknown): Record<string, unknown> {
   if (v === null || typeof v !== "object" || Array.isArray(v)) {
@@ -70,9 +76,11 @@ export function parseRequest(body: unknown): ApiRequest {
   if (typeof action !== "string" || !ACTIONS.has(action)) {
     throw new ValidationError(`Unknown or missing action.`);
   }
-  // version is family-scoped: it carries no table/rows, so it is validated before the
-  // table check (the only action for which table is not required).
+  // version and deleteAccount are family-scoped / table-less: no table, no rows, so both
+  // are validated before the table check (the only two actions for which table is not
+  // required).
   if (action === "version") return { action: "version" };
+  if (action === "deleteAccount") return { action: "deleteAccount" };
   if (!isLogicalTable(table)) {
     throw new ValidationError(`Unknown or missing table.`);
   }
