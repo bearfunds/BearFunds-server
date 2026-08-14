@@ -14,6 +14,9 @@ export interface DbExecutor {
   wipe(physicalTable: string): Promise<number>;
   // Family-scoped high-water mark (max updated_at across tenant tables), or null when empty.
   version(): Promise<{ version: string | null }>;
+  // Irreversible. Deletes the authenticated user; when they are the last account-linked
+  // member of their family, deletes the family too (cascades every tenant table).
+  deleteAccount(): Promise<{ deleted: true }>;
 }
 
 export interface ActionContext {
@@ -25,9 +28,16 @@ export async function runAction(
   db: DbExecutor,
   ctx: ActionContext,
 ): Promise<unknown> {
-  // version is table-less: handle it before resolving a physical table.
+  // version and deleteAccount are table-less: handle before resolving a physical table.
   if (req.action === "version") {
     return await db.version();
+  }
+  if (req.action === "deleteAccount") {
+    // Irreversible: never fire against the shared dev/CI test user. Inverse of wipe's gate.
+    if (ctx.isTest) {
+      throw new ValidationError("deleteAccount is not permitted in test context.");
+    }
+    return await db.deleteAccount();
   }
 
   const physical = PHYSICAL[req.table];
