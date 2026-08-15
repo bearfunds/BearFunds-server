@@ -32,7 +32,7 @@ create extension if not exists pg_net with schema extensions;
 
 create schema if not exists supabase_functions;
 grant usage on schema supabase_functions
-  to postgres, anon, authenticated, service_role;
+  to postgres, anon, authenticated, service_role, supabase_auth_admin;
 
 create table if not exists supabase_functions.migrations (
   version text primary key,
@@ -46,6 +46,22 @@ create table if not exists supabase_functions.hooks (
   created_at timestamptz not null default now(),
   request_id bigint
 );
+
+-- supabase_auth_admin is the role GoTrue uses to insert into auth.users; it needs
+-- write access to hooks so the send_welcome_email trigger (fires on that insert)
+-- does not abort the whole signup transaction with a permission error.
+grant insert on supabase_functions.hooks to postgres, anon, authenticated, service_role, supabase_auth_admin;
+grant usage, select on sequence supabase_functions.hooks_id_seq to postgres, anon, authenticated, service_role, supabase_auth_admin;
+
+-- RLS is enabled on this table with no policy (deny-all for non-owner roles),
+-- which blocks the trigger-firing role's own insert. hooks only stores internal
+-- request bookkeeping (table id, hook name, timestamp, pg_net request id), so an
+-- open insert policy for the roles that fire these triggers is not a data exposure.
+drop policy if exists hooks_insert on supabase_functions.hooks;
+create policy hooks_insert on supabase_functions.hooks
+  for insert
+  to postgres, anon, authenticated, service_role, supabase_auth_admin
+  with check (true);
 
 create or replace function supabase_functions.http_request()
 returns trigger language plpgsql as $function$
