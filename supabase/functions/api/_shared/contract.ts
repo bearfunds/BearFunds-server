@@ -78,8 +78,18 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
     ...GLOBAL_WRITABLE,
     "default_category_id", "default_sub_category_id", "icon", "color", "enc",
   ]),
+  // `role` IS NOT WRITABLE, and its absence is the point. It sat here until 2026-08-19, which meant
+  // a member could issue batchUpdate on their own row with role 'admin' and be promoted: RLS on
+  // members is family-tenancy only, no policy mentions role, and there was no trigger. Demonstrated
+  // against the RLS suite before the fix - the update simply succeeded.
+  //
+  // EVERY LEGITIMATE ASSIGNMENT IS ALREADY SERVER-SIDE, which is why removing it costs nothing: the
+  // founding admin comes from the sign-up trigger, an invited member's role from the invite row
+  // (both admin-gated in 0007), and the client writes role in exactly one place, hardcoded 'member'.
+  // The column's `default 'member'` preserves creation exactly. Migration 0021 is the loud half - a
+  // stripped key is silently dropped, so a future promote/demote UI needs a refusal it can see.
   MEMBERS: new Set([
-    ...GLOBAL_WRITABLE, "name", "role", "avatar", "color",
+    ...GLOBAL_WRITABLE, "name", "avatar", "color",
   ]),
   STAGED_TRANSACTIONS: new Set([
     ...GLOBAL_WRITABLE,
@@ -118,8 +128,16 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
   // families.name, which keeps its select-only grant from migration 0002 - so the client never gains
   // a write path to the row every tenant table's family_id points at. peek_invite reads this name
   // and falls back to the root's, which is what makes that split invisible to a joiner.
+  //
+  // `plan_type` IS NOT WRITABLE EITHER, and for the same reason one level along (operator,
+  // 2026-08-19). The comment above says it must stay server-READABLE because feature controls will
+  // gate on it; a field the client can also WRITE is a gate the client sets for itself. The client
+  // may still send it - that is the request channel, and the server dropping it is the refusal -
+  // but nothing the client says about its own plan is believed. The column stays nullable with no
+  // default: absent means the default tier, which is a fact the client can render without asserting,
+  // and a server-side setter writes real values when feature controls land.
   FAMILY_SETTINGS: new Set([
-    ...GLOBAL_WRITABLE, "family_name", "family_photo", "plan_type", "date_format",
+    ...GLOBAL_WRITABLE, "family_name", "family_photo", "date_format",
   ]),
 };
 

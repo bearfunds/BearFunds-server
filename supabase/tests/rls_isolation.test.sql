@@ -673,6 +673,64 @@ do $t$ begin
          'and falls back to the tenancy root name seeded at sign-up';
 end $t$;
 
+-- ============ Role escalation: a member cannot promote themselves ============
+-- THE SUITE HAS ALWAYS BEEN GREEN ABOUT ROLES AND NEVER ASKED THIS QUESTION. Four assertions above
+-- mention `role`, and every one checks a role that was set LEGITIMATELY - Alice is admin, Carol
+-- joined as member. None asked whether a member can BECOME an admin, and until migration 0021 the
+-- answer was yes: `role` sat in the MEMBERS writable allowlist, RLS on that table is family-tenancy
+-- only (no policy anywhere mentions role), and there was no trigger. A member issuing batchUpdate on
+-- their own row with role 'admin' was simply promoted. The invite path has always been admin-gated,
+-- which is the asymmetry that made this a bug rather than a decision.
+--
+-- Carol is a member of family A (she joined via invite i1 above), so she is the right subject.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000c"}';
+do $t$ begin
+  begin
+    update public.members set role = 'admin'
+      where user_id = '00000000-0000-0000-0000-00000000000c';
+    raise exception 'EXPECTED the role-change guard to reject a member promoting themselves';
+  exception when others then
+    if sqlstate = 'P0001' and sqlerrm like 'EXPECTED%' then raise; end if;
+  end;
+  assert (select role from public.members where user_id = '00000000-0000-0000-0000-00000000000c') = 'member',
+         'Carol is still a member after the refused promotion';
+end $t$;
+
+-- CONTROL: the guard discriminates rather than refusing every update. A member editing a NON-role
+-- field on their own row must still succeed - otherwise the assertion above passes for the wrong
+-- reason and the trigger has broken ordinary member edits.
+do $t$ begin
+  update public.members set name = 'Carol Renamed'
+    where user_id = '00000000-0000-0000-0000-00000000000c';
+  assert (select name from public.members where user_id = '00000000-0000-0000-0000-00000000000c') = 'Carol Renamed',
+         'CONTROL: a member may still edit their own non-role fields';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- CONTROL: and an ADMIN may still change a role, so the guard gates on who the caller is rather
+-- than forbidding the column outright. This is the path a future promote/demote UI would use.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+do $t$ begin
+  update public.members set role = 'admin'
+    where user_id = '00000000-0000-0000-0000-00000000000c';
+  assert (select role from public.members where user_id = '00000000-0000-0000-0000-00000000000c') = 'admin',
+         'CONTROL: an admin of the same family MAY change a member role';
+  -- put it back, so anything appended after this sees the fixture it expects
+  update public.members set role = 'member'
+    where user_id = '00000000-0000-0000-0000-00000000000c';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- CONTROL: the INSERT paths are untouched - the guard is BEFORE UPDATE, and both legitimate role
+-- assignments are inserts. Asserted rather than assumed, because a trigger written as BEFORE INSERT
+-- OR UPDATE would break sign-up and join_family and every symptom would be somewhere else.
+do $t$ begin
+  assert (select role from public.members where user_id = '00000000-0000-0000-0000-00000000000a') = 'admin',
+         'the sign-up trigger still seeds a founding admin';
+  assert (select role from public.members where user_id = '00000000-0000-0000-0000-00000000000c') = 'member',
+         'and join_family still seeds an invited member at the invite role';
+end $t$;
+
 rollback;
 \echo '================================'
 \echo 'RLS ISOLATION TESTS: ALL PASSED'
