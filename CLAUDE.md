@@ -42,6 +42,8 @@ Brain Reference docs (under `Areas/BearFunds/`): `Reference/BearFunds Server Arc
 
 Initial setup is complete and kept only as history: the canonical contract re-home (2026-06-02) and the Supabase scaffold + deploy (2026-06-17) both went through the standard protocol; details in the brain.
 
+**`search-code` is canonical in the plugin; the copy here is a DROP-IN.** The skill lives in `second-brain-skills` and is copied into this repo at `.claude/skills/search-code/` so a session is self-contained whichever machine it runs on. **Never edit the drop-in** - a rule change is written to the canonical copy and every drop-in is refreshed from it. Repo-specific search hazards do NOT belong in the skill: they are filed to `.claude/skill-extensions/search-code.md` in this repo, which the skill reads before searching.
+
 ## Environment & write-path rules (digest — brain `CLAUDE.md` "Tool reliability" is canonical)
 
 Non-negotiables for any session touching this repo from the Cowork/Claude Code sandbox. Full rules, decision matrix, and incident narratives: brain `CLAUDE.md` + `CLAUDE Lessons - Archive.md`.
