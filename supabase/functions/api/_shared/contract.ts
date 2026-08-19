@@ -26,9 +26,16 @@
 // symptom was not a missing feature: `validation.ts` throws on an unknown table, so the entire
 // pull aborted and EVERY collection stopped syncing for any client build that knew the name.
 // Guarded now by contractTables.test.ts, which derives this set from the contract XML.
+// v1.24 (ADDITIVE): FAMILY_SETTINGS - the family's name, picture, plan and date format. The FIRST
+// table added since RLE that carries NO envelope, and the asymmetry is deliberate rather than an
+// oversight: nothing on the row describes the family's money or its people. The name is already
+// plaintext on the tenancy root and peek_invite hands it to a joiner who holds no family key; the
+// photo is one of four bundled asset paths; plan_type MUST stay readable because feature controls
+// and analytics will gate on it; and a date format is not PII. Categories, subcategories and members
+// are plaintext by the same test, so this is the house rule rather than an exception.
 export type LogicalTable =
   | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "ACCOUNTS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS"
-  | "BUDGETS" | "IMPORT_MAPPINGS";
+  | "BUDGETS" | "IMPORT_MAPPINGS" | "FAMILY_SETTINGS";
 
 export const PHYSICAL: Record<LogicalTable, string> = {
   TRANSACTIONS: "transactions",
@@ -40,6 +47,7 @@ export const PHYSICAL: Record<LogicalTable, string> = {
   STAGED_TRANSACTIONS: "staged_transactions",
   BUDGETS: "budgets",
   IMPORT_MAPPINGS: "import_mappings",
+  FAMILY_SETTINGS: "family_settings",
 };
 
 // Server-managed / client-derived keys: silently removed from any inbound row.
@@ -101,6 +109,17 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
   // privacy decision rather than a convenience.
   IMPORT_MAPPINGS: new Set([
     ...GLOBAL_WRITABLE, "enc",
+  ]),
+  // FAMILY_SETTINGS is the inverse of IMPORT_MAPPINGS: every column is writable and NONE is an
+  // envelope. There is no `enc` here to reject a plaintext write against, because the plaintext IS
+  // the design - see the type union above for why each column earns that.
+  //
+  // `family_name` IS WRITABLE AND THE TENANCY ROOT IS NOT. A rename lands here rather than on
+  // families.name, which keeps its select-only grant from migration 0002 - so the client never gains
+  // a write path to the row every tenant table's family_id points at. peek_invite reads this name
+  // and falls back to the root's, which is what makes that split invisible to a joiner.
+  FAMILY_SETTINGS: new Set([
+    ...GLOBAL_WRITABLE, "family_name", "family_photo", "plan_type", "date_format",
   ]),
 };
 

@@ -32,6 +32,12 @@ function declaredTables(xml: string): string[] {
   // FAMILIES is the tenancy ROOT, not a synced collection: the client never names it in a request,
   // and rows are created by the sign-up trigger rather than through this seam. Excluded with its
   // reason rather than silently, so a future reader can argue with the exclusion.
+  //
+  // THE EXCLUSION SURVIVED v1.24 AND THAT WAS THE POINT. Family settings needed a synced home, and
+  // the obvious move was to make the root writable - add the globals to families, grant update, and
+  // serve it here. It went to a NEW tenant table instead, so the root keeps its select-only grant
+  // and the client still never names it. The reason above is therefore still true, word for word,
+  // which is the only honest way for an exclusion to survive a change that pressed on it.
   return names.filter((n) => n !== "FAMILIES");
 }
 

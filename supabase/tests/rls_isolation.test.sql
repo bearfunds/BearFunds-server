@@ -572,6 +572,107 @@ do $t$ begin
 end $t$;
 reset role; reset request.jwt.claims;
 
+-- ============ family_settings: tenancy + registration + the shared id (v1.24) ============
+-- The family's name, picture, plan and date format. NO enc envelope - nothing here describes the
+-- family's money or its people - so unlike import_mappings the asserts below can read the payload,
+-- and one of them does exactly that to prove a second family cannot.
+--
+-- THE SHARED ID IS THE POINT OF THE COMPOSITE KEY. Every family writes the SAME id here by
+-- construction ('family-settings'), so this table is the sharpest test of migration 0009's
+-- (family_id, id) primary key that exists: under a global `id` PK the second family's insert would
+-- collide into an RLS-denied upsert rather than creating its own row.
+
+-- Alice writes hers with family_id omitted -> it must be server-derived to her family.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+insert into public.family_settings (id, family_name, family_photo, plan_type, date_format)
+  values ('family-settings', 'Alice Family', '/avatars/family/family-01.png', 'Alpha Test', 'dayFirst');
+do $t$ begin
+  assert (select family_id from public.family_settings where family_name = 'Alice Family') = (select family_id from fam where who = 'A'),
+         'a new settings row must be scoped to the Alice family by the trigger, not by the client';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- Bob writes his under the IDENTICAL id. This is the collision 0009 exists to prevent.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+insert into public.family_settings (id, family_name, family_photo, plan_type, date_format)
+  values ('family-settings', 'Bob Family', '/avatars/family/family-02.png', 'Alpha Test', 'monthFirst');
+do $t$ begin
+  assert (select count(*) from public.family_settings) = 1,
+         'Bob sees exactly ONE settings row - his own - though both families share the id';
+  assert (select family_name from public.family_settings) = 'Bob Family',
+         'and it is HIS: a second family reading this table must never see the first family name';
+  assert (select date_format from public.family_settings) = 'monthFirst',
+         'including its date format, which is plaintext and therefore genuinely readable if isolation failed';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- Bob cannot rename Alice's family, by id or otherwise. The write half of isolation.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+update public.family_settings set family_name = 'Hijacked' where family_name = 'Alice Family';
+reset role; reset request.jwt.claims;
+do $t$ begin
+  assert (select count(*) from public.family_settings where family_name = 'Hijacked') = 0,
+         'Bob cannot rename the Alice family - the update matched nothing under RLS';
+  assert (select count(*) from public.family_settings where family_name = 'Alice Family') = 1,
+         'and the Alice row is untouched';
+end $t$;
+
+-- family_settings must be REGISTERED in family_version(). Same silent break as budgets and
+-- import_mappings: omit it and a device whose ONLY change is a renamed family or a switched date
+-- format is told "nothing changed" and never syncs, with no error anywhere.
+-- CONTROL first, so the assert after the forge can actually fail.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert public.family_version() < '2101-01-01T00:00:00Z'::timestamptz,
+         'CONTROL: Bob version is below the family_settings probe timestamp before the forge';
+end $t$;
+reset role; reset request.jwt.claims;
+
+set session_replication_role = replica;
+update public.family_settings set updated_at = '2101-01-01T00:00:00Z' where family_name = 'Bob Family';
+set session_replication_role = origin;
+
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert public.family_version() = '2101-01-01T00:00:00Z'::timestamptz,
+         'a family_settings row MUST move family_version() (family_settings registered in the union)';
+end $t$;
+reset role; reset request.jwt.claims;
+
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+do $t$ begin
+  assert public.family_version() <> '2101-01-01T00:00:00Z'::timestamptz,
+         'Alice version does NOT see Bob family_settings forge (per-family isolation holds for the new table)';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- ============ peek_invite reads the LIVE family name (v1.24) ============
+-- The joiner is not a member and holds no family key, so this is the one disclosure path that must
+-- keep working after the name moves. Two cases, and the FALLBACK is the one that would break
+-- silently: a family with no settings row yet must still introduce itself, not return zero rows and
+-- read to the client as an invalid token.
+-- id defaults to gen_random_uuid() and created_by references auth.users, not members - spelled out
+-- against the real table rather than assumed, because a forged shape here would test nothing.
+insert into public.invites (family_id, token, role, status, expires_at, created_by)
+  select (select family_id from fam where who = 'A'), 'tok_peek_a', 'member', 'pending',
+         now() + interval '7 days', '00000000-0000-0000-0000-00000000000a'::uuid;
+do $t$ begin
+  assert (select family_name from public.peek_invite('tok_peek_a')) = 'Alice Family',
+         'peek_invite returns the LIVE name from family_settings, not the sign-up default';
+end $t$;
+
+-- Now the fallback: drop the settings row and the invite must still name the family.
+delete from public.family_settings where family_name = 'Alice Family';
+do $t$ begin
+  assert (select count(*) from public.peek_invite('tok_peek_a')) = 1,
+         'a family with NO settings row still returns a row - the left join is what stops a missing optional row reading as an invalid token';
+  -- handle_new_user names the family from the Google display name, so Alice's is "Alice's Family" -
+  -- read off the row rather than assumed, because the column DEFAULT is 'My Family' and never used.
+  assert (select family_name from public.peek_invite('tok_peek_a'))
+         = (select name from public.families where id = (select family_id from fam where who = 'A')),
+         'and falls back to the tenancy root name seeded at sign-up';
+end $t$;
+
 rollback;
 \echo '================================'
 \echo 'RLS ISOLATION TESTS: ALL PASSED'

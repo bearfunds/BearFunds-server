@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<!-- Canonical: BearFunds-server · v1.23
+<!-- Canonical: BearFunds-server - v1.24
   This repo is the canonical home for the shared client<->server Schema Contract
   (re-home decided in the brain's Sources of Truth, 2026-06-01; executed 2026-06-02).
   It is NOT casually editable. Any change is a deliberate version bump with a one-line
@@ -47,11 +47,11 @@
   v1.23 (BREAKING + DESTRUCTIVE - domain rename): the WALLETS table becomes ACCOUNTS, and the
   `wallet_id` foreign key on TRANSACTIONS and STAGED_TRANSACTIONS becomes `account_id`. Inside the encrypted envelopes the budgets `wallet_ids` becomes `account_ids` and the staged `source_wallet` becomes `source_account`. "Account" is the domain word; "wallet" was never one the product used.
   Alpha-phase clean cut: no compatibility window and no dual-read, because the table name is also the additional authenticated data the client binds each envelope to (`<table>:<id>`), so every existing row is undecryptable by construction rather than by choice. Deploy is a coordinated client+server cut with a full data wipe and a squashed migration history. -->
-<SchemaContract version="1.23">
+<SchemaContract version="1.24">
     <Meta>
         <Description>Immutable Source of Truth for Backend API and Database Schema</Description>
         <Usage>Paste this into the AI Context before generating any API or Data Fetching code.</Usage>
-        <Canonical>BearFunds-server · v1.23</Canonical>
+        <Canonical>BearFunds-server · v1.24</Canonical>
     </Meta>
     <Protocol>
         <Rule name="Endpoint">Single Entry Point (one POST endpoint). RESTful routes (GET /transactions) DO NOT exist.</Rule>
@@ -260,6 +260,24 @@
                     description="Google sign-in photo. SERVER-MANAGED, read-only: written by the sign-in trigger (handle_new_user), present in reads, ignored/stripped on writes. Render precedence is custom avatar -> google_avatar -> generated initials, so it is a default that never overwrites a custom avatar." />
             <Column key="color"
                     type="String" />
+        </Table>
+        <Table name="FAMILY_SETTINGS"
+               key="FAMILY_SETTINGS">
+            <Column key="id"
+                    type="String"
+                    description="Primary Key. The FIXED literal 'family-settings' - one row per family, so every family writes the same id. The physical primary key is (family_id, id) per migration 0009, which is what stops the second family colliding into an RLS-denied upsert." />
+            <Column key="family_name"
+                    type="String"
+                    description="The family's display name, and the LIVE one. families.name is the sign-up default and never moves again; this is what a rename writes and what peek_invite reads, falling back to families.name for a family that has not written a settings row yet." />
+            <Column key="family_photo"
+                    type="String"
+                    description="A path to one of the bundled family avatars. Not user imagery: the client's picker is fed a fixed list and there is no upload path, so the value is a choice from a shipped set." />
+            <Column key="plan_type"
+                    type="String"
+                    description="The family's plan. Deliberately PLAINTEXT and deliberately server-readable: it carries the constant 'Alpha Test' today and will carry feature controls and analytics, and a server that cannot read a plan cannot gate a feature on it." />
+            <Column key="date_format"
+                    type="String"
+                    description="Which way round a date reads for everyone in the family - 'dayFirst' or 'monthFirst'. A value outside that set is refused by the client and resolves to the default. Never reaches an ISO key: interchange stays yyyy-mm-dd." />
         </Table>
         <Table name="STAGED_TRANSACTIONS"
                key="STAGED_TRANSACTIONS">
