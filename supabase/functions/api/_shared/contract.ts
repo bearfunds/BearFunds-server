@@ -54,6 +54,21 @@ export const PHYSICAL: Record<LogicalTable, string> = {
 // family_id & user_id are server-derived (never trusted); updated_at is trigger-managed;
 // isDirty is a client-only transient flag that is never persisted.
 //
+// WHAT A STRIP DOES TO THE STORED VALUE, MEASURED RATHER THAN ASSUMED (2026-08-20). A stripped key
+// is a column ABSENT from the row handed to .upsert(), so this whole mechanism rests on what
+// PostgREST does with an absent column on the ON CONFLICT update path: it leaves it alone. Measured
+// against the local stack - plan_type was set to a probe value directly in the database, a family
+// rename was synced, and the probe value survived a push whose row demonstrably carried the new
+// name. Had it default-filled instead, a strip would be a silent DELETE of whatever the server had
+// stored, which is the exact opposite of the protection it resembles: family_settings would lose
+// its plan on every push, and members.user_id would be nulled on every members batch.
+//
+// THE TRIGGERS ARE NOT WHAT MAKES THIS SAFE, though they look like it. family_id and updated_at are
+// repopulated by the per-table triggers generated in 0002 and would survive either way; plan_type
+// and user_id have no such trigger and survive purely on the retention property above. If a future
+// column must be both stripped AND guaranteed, a trigger is the mechanism that guarantees it -
+// this list is not.
+//
 // `plan_type` IS STRIPPED RATHER THAN REJECTED, and the two are not interchangeable. The client
 // sends it on every family_settings push and is EXPECTED to keep doing so - the client's
 // tests/planAuthority pins the send in place, on the grounds that the client may ask and the server
