@@ -33,6 +33,15 @@
 // photo is one of four bundled asset paths; plan_type MUST stay readable because feature controls
 // and analytics will gate on it; and a date format is not PII. Categories, subcategories and members
 // are plaintext by the same test, so this is the house rule rather than an exception.
+// v1.26 (BREAKING + DESTRUCTIVE): budget ids leave the envelope. line_id, account_ids and
+// ignored_category_ids become plaintext columns, and category_ids joins them as a FLATTENED UNION
+// of every Area's categories - a projection of the envelope rather than a move out of it, so the
+// server learns which categories a Budget watches and never how they are grouped. A server cannot
+// scope what it cannot read, and BUDGETS was the only table whose foreign keys were sealed while
+// TRANSACTIONS has carried account_id in plaintext since v1.23. area_id is NOT promoted: it exists
+// only inside adjustments, beside an amount. Period bounds, targets, names, notes and Area amounts
+// stay sealed - this reopens the LINE-ID half of v1.17 and not the bounds half. Rows are WIPED by
+// migration 0022 (pre-alpha; every existing Budget is test data).
 export type LogicalTable =
   | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "ACCOUNTS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS"
   | "BUDGETS" | "IMPORT_MAPPINGS" | "FAMILY_SETTINGS";
@@ -147,9 +156,14 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
   // `period_type` is a coarse cadence. Neither is sensitive, neither is computed over server-side,
   // and both exist for debuggability. currency / template_id / period_start / period_end /
   // stopped_at are GONE (migration 0017 drops the columns).
+  // v1.26: the four id columns are CLIENT-WRITABLE, unlike FAMILY_SETTINGS.plan_type. Nothing here
+  // is a claim the server needs to own - an id names a row the client already holds, and the server
+  // reads them only to answer "may this member see this Budget". A stripped or refused id would
+  // make the Budget invisible to the predicate that exists to scope it.
   BUDGETS: new Set([
     ...GLOBAL_WRITABLE,
     "period_type", "kind", "enc",
+    "line_id", "account_ids", "ignored_category_ids", "category_ids",
   ]),
   // IMPORT_MAPPINGS is a PURE enc table - the only one. A bank's column names describe the account,
   // so the header, the normalised key and the verdict are all user data and none of them has a
