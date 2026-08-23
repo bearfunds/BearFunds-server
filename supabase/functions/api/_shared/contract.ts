@@ -95,8 +95,14 @@ export const PHYSICAL: Record<LogicalTable, string> = {
 // key makes sanitizeRow THROW and one such key killed every collection's sync on 2026-08-19,
 // whereas a strip drops silently and the trigger repopulates. The read path is unaffected:
 // the column comes back on pulled rows and the client simply has no adapter for it.
+// `scope_version` (migration 0025, contract v1.27) is the server's statement of how many times
+// what a member may RECEIVE has changed. The client reads it and answers a bump by clearing its
+// scoped local stores and re-pulling; a client value for it would be a claim about its own
+// permissions, and a false one would either suppress a needed re-pull or force a needless
+// delete. Stripped rather than non-writable for the reason the two entries above share.
 export const STRIPPED_KEYS = new Set<string>([
   "family_id", "user_id", "updated_at", "isDirty", "is_dirty", "plan_type", "created_by",
+  "scope_version",
 ]);
 
 const GLOBAL_WRITABLE = ["id", "deleted", "is_immutable"];

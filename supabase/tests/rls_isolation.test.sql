@@ -997,6 +997,64 @@ do $t$ begin
 end $t$;
 reset role; reset request.jwt.claims;
 
+-- ============ scope_version: the only channel a scope change has (0025) ============
+-- A delta read can deliver neither a widened nor a narrowed scope, so the server counts the
+-- changes on the member's own row and the client answers a bump by clearing and re-pulling.
+-- The asserts below are about the SERVER half: that the counter moves exactly when scope moves.
+do $t$ begin
+  assert (select scope_version from public.members where id = (select carol_member from vis)) = 2,
+         'the grant and the revoke above bumped Carol scope_version exactly twice';
+  assert (select scope_version from public.members where user_id = '00000000-0000-0000-0000-00000000000a') = 0,
+         'and nobody else moved - a bump is per MEMBER, not per family';
+end $t$;
+
+-- IDEMPOTENT CALLS MUST NOT BUMP, and this is load-bearing rather than tidy: the client answers
+-- a bump by DELETING local rows, so a re-grant of what is already granted would cost a member a
+-- clear-and-refetch for no reason. grant is `on conflict do nothing` and revoke is a delete, so
+-- both can legitimately be no-ops - FOUND is what tells them apart.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+do $t$
+declare before_v integer;
+begin
+  select scope_version into before_v from public.members where id = (select carol_member from vis);
+
+  perform public.revoke_account_access('w_shared', (select carol_member from vis));
+  assert (select scope_version from public.members where id = (select carol_member from vis)) = before_v,
+         'revoking what is not granted changes nothing and must NOT bump';
+
+  perform public.grant_account_access('w_shared', (select carol_member from vis));
+  assert (select scope_version from public.members where id = (select carol_member from vis)) = before_v + 1,
+         'CONTROL: a real grant DOES bump - so the assert above is not passing because bumps never happen';
+
+  perform public.grant_account_access('w_shared', (select carol_member from vis));
+  assert (select scope_version from public.members where id = (select carol_member from vis)) = before_v + 1,
+         'and re-granting what is already granted must NOT bump';
+end $t$;
+
+reset role; reset request.jwt.claims;
+
+-- The bump must REACH her, which means riding updated_at like any other change. Without that the
+-- counter is correct and undeliverable, which is exactly the failure it exists to fix.
+--
+-- ASSERTED BY BACKDATING RATHER THAN BY COMPARING TWO READINGS. This suite runs inside ONE
+-- transaction and set_updated_at stamps now(), which is transaction-constant - so "read the
+-- stamp, act, read it again" compares a value to itself and fails against a working trigger.
+-- Backdating the row first gives the trigger something to visibly move.
+update public.members set updated_at = '2000-01-01T00:00:00Z'
+  where id = (select carol_member from vis);
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+do $t$ begin
+  perform public.revoke_account_access('w_shared', (select carol_member from vis));
+end $t$;
+reset role; reset request.jwt.claims;
+do $t$ begin
+  assert (select updated_at from public.members where id = (select carol_member from vis))
+         > '2000-01-01T00:00:00Z'::timestamptz,
+         'a bump moves updated_at, so the row enters the member next delta pull';
+  assert (select updated_at from public.members where id = (select carol_member from vis)) = now(),
+         'CONTROL: it was the set_updated_at trigger that moved it, not the backdate lingering';
+end $t$;
+
 -- ============ import_mappings is ADMIN-ONLY (was a navigation gate only) ============
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
 insert into public.import_mappings (id, enc) values ('im_vis1', 'v1.iv_im.ct_im');

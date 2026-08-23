@@ -1,325 +1,330 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<!-- Canonical: BearFunds-server - v1.26
+<!-- Canonical: BearFunds-server - v1.27
   This repo is the canonical home for the shared client<->server Schema Contract
   (re-home decided in the brain's Sources of Truth, 2026-06-01; executed 2026-06-02).
   It is NOT casually editable. Any change is a deliberate version bump with a one-line
   rationale; the operator drops the versioned copy into the client (downstream consumer).
+  
   v1.15 (BREAKING - Row-Level Encryption): sensitive fields (transaction amount/notes/tags, wallet name/description, entity name/aliases/patterns, staged raw import fields) move into an opaque client-encrypted `enc` envelope column on TRANSACTIONS/WALLETS/ENTITIES/ STAGED_TRANSACTIONS; their plaintext keys are REMOVED from the wire and rejected as unknown keys. The server stores `enc` verbatim and never reads inside it. Alpha-phase clean cut (2026-07-02): no compatibility window; deploy is coordinated client+server with a data wipe + fresh initial upload. Categories/subcategories/members stay plaintext by design.
+  
   v1.16 (ADDITIVE - Budgets): new BUDGETS table. A Budget is an optional informational layer over transactions/accounts/categories, scoped to a period; it never holds or moves money. It is an ENC table: name, amount, note, percent AND the category/account membership all ride the `enc` envelope, so only the period/currency scaffolding is plaintext. The server therefore cannot enforce the one-category-per-Budget-per-period rule; the client owns it. Utilization is computed on device from the ledger, never snapshotted.
+  
   v1.17 (BREAKING + DESTRUCTIVE - Budgets/Areas remodel): a Budget becomes a period-scoped container of AREAS (named category groups whose amounts sum to the allocated total). Every budget row is now an INSTANCE - the instructions to compute one Budget for one period. Templates are gone. Plaintext scaffolding shrinks to `kind` + `period_type` (debuggability only); `currency`, `template_id`, `period_start`, `period_end` and `stopped_at` are REMOVED from the wire and rejected as unknown keys. Period bounds, the recurring line id and the whole plan (accounts, Areas, target) move INSIDE the `enc` envelope, so the server can no longer read a family's cadence, currency or a one-off's date range. Alpha-phase clean cut:
   budget rows are WIPED (no user data exists); deploy is coordinated client+server.
+  
   v1.18 (ADDITIVE - Area icons): each Area inside the budgets `enc` envelope carries an `icon` (a lucide icon name). The server stores `enc` verbatim and reads none of it, so this is a client-side model change with no migration, no policy and no server code. Absent on read = the client's fallback icon.
+  
   v1.19 (ADDITIVE - ignored categories): the budgets `enc` envelope carries an optional `ignored_category_ids` (String[]): the categories a Budget deliberately does not watch. The server stores `enc` verbatim and reads none of it - no migration, no policy, no
   server code. Absent on read = nothing ignored.
   v1.20 (ADDITIVE - provenance): `imported_from` joins the TRANSACTIONS and STAGED_TRANSACTIONS envelopes. Envelope-only, so no column, no migration and no server change: the field is written, read and rendered entirely on device. It is a RENDERED STRING rather than a structured value, so filtering by source KIND is not possible without a later migration that re-parses it. Optional and permanently so - absence means the row was entered by hand. 
+  
   v1.21 (ADDITIVE - arrival order): `source_index` (Number) and `batch_at` (String) join the STAGED_TRANSACTIONS envelope. Envelope-only, so no column, no migration and no server change: the server stores `enc` verbatim and never orders staged rows - the whole import review lives on the device. TWO FIELDS BECAUSE ONE CANNOT SAY IT: `source_index` is a row's 0-based position in its file, and "import more" appends a second file, so row 0 of the second batch is not a peer of row 0 of the first; `batch_at` is when that file was staged, stamped once per batch and never edited. Nothing existing carries it - `batch_id` is a UUID and `updated_at` mutates on every edit. A single monotonic ordinal was rejected instead of the pair because staged rows SYNC: an ordinal minted locally as max+1 collides when two devices each import a file. Optional and permanently so - a rowwritten before v1.21 opens without them, and an absent `source_index` means UNKNOWN rather thanposition zero, so such rows sort after every stamped one. Neither field is copied onto the transaction on promotion: a promoted row is no longer part of a file.
+  
   v1.22 (ADDITIVE - import mapping memory): new tenant table `IMPORT_MAPPINGS`, the family's memory of which source column header maps to which import field, so a bank's file mapped once is mapped automatically next time. Synced across the family: two people importing from the same bank should not each teach the app the same thing. WHY THIS PERSISTS WHEN THE OTHER IMPORT MAPPINGS DID NOT: the client's per-value mappings (wallet, category, name) were deleted because each stored a RECORD ID that could name a deleted record, and the user found out only when a step rendered blank. This maps to a FIELD NAME from a closed set, which cannot go stale that way. THE VERDICT IS A UNION, not a nullable field - "this column is ignored" is worth as much as "this column is the date", since it is what stops a reference-number column being re-proposed monthly; on the client it collapses two parallel maps previously held mutually exclusive by hand. ENTIRELY ENCRYPTED: a bank's column names describe the account, so the table has NO plaintext columns beyond the tenancy and sync scaffolding. CONSEQUENCE, STATED DELIBERATELY: the server cannot dedupe or index on the header, so DEDUP IS THE CLIENT'S JOB - and because ids are random, two devices mapping the same header while offline will create two rows. That is expected. Convergence must need no coordination: newest `updated_at`, ties broken by the lexicographically smallest id, loser tombstoned. A deterministic id (a digest of the header) was rejected: a plain hash of "date" or "amount" falls to a wordlist, which would publish the shape of a family's bank file to a server that is not allowed to read it.
-  v1.23 (BREAKING + DESTRUCTIVE - domain rename): the WALLETS table becomes ACCOUNTS, and the `wallet_id` foreign key on TRANSACTIONS and STAGED_TRANSACTIONS becomes `account_id`. Inside the encrypted envelopes the budgets `wallet_ids` becomes `account_ids` and the staged `source_wallet` becomes `source_account`. "Account" is the domain word; "wallet" was never one the product used. Alpha-phase clean cut: no compatibility window and no dual-read, because the table name is also the additional authenticated data the client binds each envelope to (`<table>:<id>`), so every existing row is undecryptable by construction rather than by choice. Deploy is a coordinated client+server cut with a full data wipe and a squashed migration history.
+  
+  v1.23 (BREAKING + DESTRUCTIVE - domain rename): the WALLETS table becomes ACCOUNTS, and the `wallet_id` foreign key on TRANSACTIONS and STAGED_TRANSACTIONS becomes `account_id`. Inside the encrypted envelopes the budgets `wallet_ids` becomes `account_ids` and the staged `source_wallet` becomes `source_account`. "Account" is the domain word; "wallet" was never one the product used. Alpha-phase clean cut: no compatibility window and no dual-read, because the table name is also the additional authenticated data the client  binds each envelope to (`<table>:<id>`), so every existing row is undecryptable by construction rather than by choice. Deploy is a coordinated client+server cut with a full data wipe and a squashed migration history.
+  
   v1.24 (ADDITIVE - family settings): new tenant table FAMILY_SETTINGS, one row per family, carrying `family_name`, `family_photo`, `plan_type` and `date_format`. ENTIRELY PLAINTEXT and deliberately so, which inverts the rule every table since RLE has followed: nothing here describes the family's money or its people. `family_name` is already plaintext on the tenancy root and `peek_invite` hands it to a joiner who holds no family key; `family_photo` is one of four bundled asset paths, not an upload; `plan_type` MUST stay server-readable or a server cannot gate a feature on a plan; `date_format` is a display preference and not PII. THE RISK THEREFORE RUNS THE OTHER WAY from every other table - the danger is somebody adding an envelope and making `plan_type` unreadable to the feature controls that will gate on it, which tests/familySettingsSync pins. The week start is NOT here: Area 005 states the convention is not user-configurable while a Budget's anchor is persisted.
+  
   v1.25 (CLARIFYING - plan authority): `plan_type` on FAMILY_SETTINGS is SERVER-OWNED. It is not writable and is silently STRIPPED from inbound rows rather than rejected, which is the difference that matters: the client sends it on every push as a request channel, and the server dropping it is the refusal. A rejected key would fail the whole batch and take the sync with it. Nothing the client says about its own plan is believed; a server-side setter writes real values when feature controls land, and it must not be reachable from the action endpoint. `role` on MEMBERS is unchanged and remains writable - a role CHANGE is refused by the members_role_change_guard trigger (migration 0021), not by the wire allowlist, because a trigger exception is a refusal the client can see.
   a refusal the client can see.
-  v1.26 (BREAKING + DESTRUCTIVE - budget ids leave the envelope): four plaintext columns join BUDGETS - `line_id`, `account_ids`, `ignored_category_ids` and `category_ids` - and the first three leave the encrypted envelope entirely. THE REASON IS THAT A SERVER CANNOT SCOPE WHAT IT CANNOT READ: a Budget's visibility to a family member is resolved from the accounts it aggregates, and BUDGETS was the only table whose foreign keys were sealed while TRANSACTIONS and STAGED_TRANSACTIONS carry `account_id` in plaintext. An opaque id discloses nothing those columns do not already disclose. `category_ids` is DIFFERENT IN KIND and deliberately so: it is a flattened UNION of every Area's categories, a projection of the envelope's per-Area grouping rather than a move out of it, so the server learns WHICH categories a Budget watches and never HOW THEY ARE GROUPED - the grouping is the plan, and the plan stays sealed. `area_id` is NOT promoted: it exists only inside `adjustments`, beside an amount, and is meaningless apart from it. Period bounds, `live`, targets, names, notes and every Area amount remain inside the envelope. DESTRUCTIVE because there is no mapping from an old row to a new one - the promoted fields are ciphertext the server cannot read, so it cannot rewrite them - and the rows are therefore deleted rather than transformed. Deploy is a coordinated server-then-client cut with no window in which the two versions coexist: a client emitting the new columns at an older server is rejected as an unknown key, which fails the whole batch. -->
-<SchemaContract version="1.26">
-    <Meta>
-        <Description>Immutable Source of Truth for Backend API and Database Schema</Description>
-        <Usage>Paste this into the AI Context before generating any API or Data Fetching code.</Usage>
-        <Canonical>BearFunds-server · v1.26</Canonical>
-    </Meta>
-    <Protocol>
-        <Rule name="Endpoint">Single Entry Point (one POST endpoint). RESTful routes (GET /transactions) DO NOT exist.</Rule>
-        <Rule name="Method">POST only.</Rule>
-        <Rule name="Auth">Authorization: Bearer {JWT}. Each request carries a Supabase session JWT in the Authorization header. The legacy body "key" field is REMOVED. Unauthenticated/invalid-token requests return { status: 'error' }.</Rule>
-        <Rule name="Tenancy">family_id is SERVER-DERIVED from the authenticated session and applied server-side. A client-supplied family_id/user_id in the body is ignored/overwritten. Row-Level Security enforces per-family isolation as the backstop.</Rule>
-        <Rule name="Encryption">Row-Level Encryption (v1.14). Sensitive fields ride the per-row `enc` column: an opaque client-encrypted envelope "v1.{b64 iv}.{b64 ciphertext}" (AES-256-GCM, family key, AAD-bound to table:id). The server stores and returns `enc` verbatim, never inspects it, and REJECTS the removed plaintext keys as unknown. Keys never leave family devices; there is no server-side recovery.</Rule>
-        <Rule name="Concurrency">Client must use a Request Queue. Network calls are strictly serial.</Rule>
-        <Rule name="ErrorHandling">Strict. Error envelope: { status: 'error', code, message } where `code` is a closed enum - AUTH (401), VALIDATION (400/405, incl. unknown payload keys and malformed bodies), RLS_DENIED (403), CONFLICT (409), INTERNAL (500). Messages are fixed, leak-free texts: VALIDATION carries the authored validation detail; no raw database detail (table, policy, or constraint names) ever reaches the wire.</Rule>
-    </Protocol>
-    <Payloads>
-        <Action name="read">
-            <Description>Delta Sync. Returns rows modified since timestamp.</Description>
-            <Example><![CDATA[ { "action": "read", "table": "TRANSACTIONS", "since": "2024-01-01T00:00:00Z" } ]]></Example>
-        </Action>
-        <Action name="batchCreate">
-            <Description>Bulk Insert. ID is optional (generated by server if missing).</Description>
-            <Example><![CDATA[ { "action": "batchCreate", "table": "TRANSACTIONS", "rows": [ { "date": "2024-01-01", "enc": "v1.9k3f...==.q8Zx...==", "category_id": "..." } ] } ]]></Example>
-        </Action>
-        <Action name="batchUpdate">
-            <Description>Bulk Edit. Updates ONLY the specific keys provided.</Description>
-            <Example><![CDATA[ { "action": "batchUpdate", "table": "TRANSACTIONS", "updates": [ { "id": "uuid-1", "enc": "v1.7wPa...==.mB2c...==" } ] } ]]></Example>
-        </Action>
-        <Action name="batchUpsert">
-            <Description>Idempotent Save. Creates if ID missing, Updates if ID exists. Best for Seeding Test Data and sync creates.</Description>
-            <Example><![CDATA[ { "action": "batchUpsert", "table": "ACCOUNTS", "rows": [ { "id": "w001", "enc": "v1.f2Nc...==.tR7d...==", "currency": "EUR" } ] } ]]></Example>
-        </Action>
-        <Action name="wipe">
-            <Description>Destructive (Test Mode Only). Clears all data in the specified table for the caller's family.</Description>
-            <Example><![CDATA[ { "action": "wipe", "table": "TRANSACTIONS" } ]]></Example>
-        </Action>
-        <Action name="version">
-            <Description>Lightweight sync probe. Family-scoped; takes no table and no rows. Returns the family high-water mark = max(updated_at) across all tenant tables (or null when the family has no rows), so the client can check on app open whether anything changed since its last sync WITHOUT pulling every collection.</Description>
-            <Example><![CDATA[ Request: { "action": "version" } Response: { "status": "success", "data": { "version": "2026-06-29T10:15:00.000Z" } } ]]></Example>
-        </Action>
-    </Payloads>
-    <DatabaseSchema>
-        <Note>These are LOGICAL KEYS (snake_case). Do not use physical Table Headers.</Note>
-        <GlobalColumns>
-            <Column key="family_id"
-                    type="String (UUID)"
-                    sync="server-derived"
-                    description="Tenancy key. Derived from the session; NEVER accepted from the client body. Present on all domain tables." />
-            <Column key="updated_at"
-                    type="ISO String"
-                    description="Auto-managed by Server (trigger)." />
-            <Column key="deleted"
-                    type="Boolean"
-                    description="Soft Delete flag." />
-            <Column key="is_immutable"
-                    type="Boolean"
-                    description="System object protection." />
-        </GlobalColumns>
-        <Table name="FAMILIES"
-               key="FAMILIES">
-            <Column key="id"
-                    type="String (UUID)"
-                    description="Primary Key. Tenancy root." />
-            <Column key="name"
-                    type="String"
-                    description="Family display name." />
-            <Column key="created_at"
-                    type="ISO String"
-                    description="Server-managed creation timestamp." />
-        </Table>
-        <Table name="TRANSACTIONS"
-               key="TRANSACTIONS">
-            <Column key="id"
-                    type="String"
-                    description="Primary Key as UUID, or special cases for 'immutable / test' logic" />
-            <Column key="date"
-                    type="String"
-                    description="ISO YYYY-MM-DD" />
-            <Column key="enc"
-                    type="String"
-                    description="Opaque encrypted envelope 'v1.{iv}.{ct}'. Plaintext JSON inside (client-only): { amount: Number (absolute value), description: String, tags: String[] (uppercase convention), imported_from: String (OPTIONAL, v1.20 - where the row came from, in words: a file name for an import, a sentence naming the feed and time for a future sync. Written once by whatever created the row and never edited. ABSENT means the transaction was entered by hand: every row written before v1.20 opens without it, permanently, so a reader must never render a placeholder in its place) }." />
-            <Column key="currency"
-                    type="String"
-                    description="ISO (EUR, USD)" />
-            <Column key="type"
-                    type="String"
-                    description="'income', 'expense'" />
-            <Column key="category_id"
-                    type="String"
-                    description="FK -> Categories" />
-            <Column key="sub_category_id"
-                    type="String"
-                    description="FK -> SubCategories" />
-            <Column key="entity_id"
-                    type="String"
-                    description="FK -> Entities" />
-            <Column key="account_id"
-                    type="String"
-                    description="FK -> Accounts" />
-            <Column key="member_id"
-                    type="String"
-                    description="FK -> Members" />
-            <Column key="status"
-                    type="String"
-                    description="'cleared', 'pending'" />
-        </Table>
-        <Table name="CATEGORIES"
-               key="CATEGORIES">
-            <Column key="id"
-                    type="String"
-                    description="Primary Key, formatted as 'c001', or special cases for 'immutable' logic" />
-            <Column key="name"
-                    type="String"
-                    description="Display Name" />
-            <Column key="type"
-                    type="String"
-                    description="'income' or 'expense'" />
-            <Column key="icon"
-                    type="String"
-                    description="Emoji/Icon ID" />
-            <Column key="color"
-                    type="String"
-                    description="Hex Code" />
-            <Column key="description"
-                    type="String"
-                    description="Notes/Memo, optional" />
-        </Table>
-        <Table name="SUBCATEGORIES"
-               key="SUBCATEGORIES">
-            <Column key="id"
-                    type="String"
-                    description="Primary Key, formatted as 'sc001', or special cases for 'immutable' logic" />
-            <Column key="category_id"
-                    type="String"
-                    description="FK -> Categories. Tenancy via the parent category." />
-            <Column key="name"
-                    type="String"
-                    description="Display Name" />
-            <Column key="is_default"
-                    type="Boolean"
-                    description="True for the permanent 'General' default of a user category (not renamable/deletable)." />
-        </Table>
-        <Table name="ACCOUNTS"
-               key="ACCOUNTS">
-            <Column key="id"
-                    type="String"
-                    description="Primary Key, formatted as 'w001', or special cases for 'immutable' logic" />
-            <Column key="enc"
-                    type="String"
-                    description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { name: String (bank/account name), description: String }." />
-            <Column key="currency"
-                    type="String"
-                    description="ISO Code" />
-            <Column key="icon"
-                    type="String" />
-            <Column key="color"
-                    type="String" />
-            <Column key="is_default"
-                    type="Boolean" />
-        </Table>
-        <Table name="BUDGETS"
-               key="BUDGETS">
-            <Column key="id"
-                    type="String"
-                    description="Primary Key. Random, minted on the creating device. Never derived: convergence is by client-side dedup on the decrypted instructions, not by id construction." />
-            <Field name="enc"
-                   type="String"
-                   nullable="false"
-                   description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { live: Boolean (this line duplicates into the next period), period_start: String (ISO YYYY-MM-DD), period_end: String (ISO YYYY-MM-DD), target: Number (optional - what the family intends to spend or save this period; absent = the user skipped it, and the card then shows allocated vs actual only), areas: [{ id: String, name: String, amount: Number, category_ids: String[], icon: String (a lucide icon name; the Area's identity on every card. It is rendered in ONE colour - the Area's HEALTH - so no colour is chosen and none is stored. Optional on the wire and defaulted on read, so a row written without it still opens) }] (the plan; the Area amounts sum to the ALLOCATED total, which is derived and never stored. The per-Area category_ids are AUTHORITATIVE: the plaintext category_ids column is a flattened projection of them and never the source), adjustments: [{ area_id: String, amount: Number }] (period-local reallocations; they die with their period and are never duplicated forward), note: String (optional) }." />
-            <Column key="line_id"
-                    type="String"
-                    description="Groups the instances of one recurring Budget. Random, minted on the creating device and copied on duplication; it coordinates nothing, so two devices may hold different ids for the same period and the client collapses the twins by comparing decrypted instructions." />
-            <Column key="account_ids"
-                    type="String[]"
-                    description="The accounts this Budget aggregates. Plaintext because a Budget's visibility to a family member is resolved from it server-side. The first account selected fixes the Budget's currency, which is NEVER stored." />
-            <Column key="ignored_category_ids"
-                    type="String[]"
-                    description="Optional - categories this Budget DELIBERATELY does not watch. Every category no Area claims is otherwise reported as a planning gap; ignoring one records that the omission was a decision, so it stops being reported. It does NOT stop the money: spend in an ignored category still fails to move the Budget, and the unclaimed-SPEND figure still counts it. Per Budget, never global. Absent = none ignored." />
-            <Column key="category_ids"
-                    type="String[]"
-                    description="The union of every Area's category_ids, flattened. A PROJECTION of the envelope's per-Area grouping and never the source of truth: it records which categories a Budget watches and deliberately not how they are grouped. Rewritten whenever the plan is written." />            
-            <Column key="kind"
-                    type="String"
-                    description="'instance' - the only kind. Retained as a plaintext debuggability token and a forward hook; templates no longer exist." />
-            <Column key="period_type"
-                    type="String"
-                    description="'weekly', 'monthly', 'annual', 'one_off'. Plaintext for debuggability only; the server never computes over it." />
-        </Table>
-        <Table name="ENTITIES"
-               key="ENTITIES">
-            <Column key="id"
-                    type="String"
-                    description="Primary Key, formatted as 'e001', or special cases for 'immutable' logic" />
-            <Column key="enc"
-                    type="String"
-                    description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { name: String, aliases: String[], match_patterns: String[] (regex strings) }." />
-            <Column key="default_category_id"
-                    type="String" />
-            <Column key="default_sub_category_id"
-                    type="String"
-                    description="FK -> SubCategories" />
-            <Column key="icon"
-                    type="String" />
-            <Column key="color"
-                    type="String" />
-        </Table>
-        <Table name="MEMBERS"
-               key="MEMBERS">
-            <Column key="id"
-                    type="String"
-                    description="Primary Key, formatted as 'm001', or special cases for 'immutable' logic" />
-            <Column key="name"
-                    type="String" />
-            <Column key="role"
-                    type="String"
-                    description="'admin', 'member'" />
-            <Column key="user_id"
-                    type="String"
-                    description="Auth-user link. SERVER-DERIVED, read-only: present in reads, ignored/stripped on writes. The client derives 'Me' as the member whose user_id equals the session uid." />
-            <Column key="avatar"
-                    type="String"
-                    description="URL or Base64" />
-            <Column key="google_avatar"
-                    type="String"
-                    description="Google sign-in photo. SERVER-MANAGED, read-only: written by the sign-in trigger (handle_new_user), present in reads, ignored/stripped on writes. Render precedence is custom avatar -> google_avatar -> generated initials, so it is a default that never overwrites a custom avatar." />
-            <Column key="color"
-                    type="String" />
-        </Table>
-        <Table name="FAMILY_SETTINGS"
-               key="FAMILY_SETTINGS">
-            <Column key="id"
-                    type="String"
-                    description="Primary Key. The FIXED literal 'family-settings' - one row per family, so every family writes the same id. The physical primary key is (family_id, id) per migration 0009, which is what stops the second family colliding into an RLS-denied upsert." />
-            <Column key="family_name"
-                    type="String"
-                    description="The family's display name, and the LIVE one. families.name is the sign-up default and never moves again; this is what a rename writes and what peek_invite reads, falling back to families.name for a family that has not written a settings row yet." />
-            <Column key="family_photo"
-                    type="String"
-                    description="A path to one of the bundled family avatars. Not user imagery: the client's picker is fed a fixed list and there is no upload path, so the value is a choice from a shipped set." />
-            <Column key="plan_type"
-                    type="String"
-                    description="The family's plan. SERVER-OWNED, read-only: present in reads, ignored/stripped on writes - the client may send it and is not answered. Deliberately PLAINTEXT and deliberately server-readable: it carries the constant 'Alpha Test' today and will carry feature controls and analytics, and a server that cannot read a plan cannot gate a feature on it. Nullable with no default: absent means the default tier." />
-            <Column key="date_format"
-                    type="String"
-                    description="Which way round a date reads for everyone in the family - 'dayFirst' or 'monthFirst'. A value outside that set is refused by the client and resolves to the default. Never reaches an ISO key: interchange stays yyyy-mm-dd." />
-        </Table>
-        <Table name="STAGED_TRANSACTIONS"
-               key="STAGED_TRANSACTIONS">
-            <Column key="id"
-                    type="String (UUID)"
-                    description="Primary Key." />
-            <Column key="batch_id"
-                    type="String (UUID)"
-                    description="Groups all rows from one import run; enables bulk clear/delete of a batch." />
-            <Column key="date"
-                    type="String"
-                    description="ISO YYYY-MM-DD when resolved; may be empty/unparsed while staged." />
-            <Column key="enc"
-                    type="String"
-                    description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { amount: String (RAW import text; parsed to Number on promotion), description: String, tags: String[], source_account: String, source_category: String, source_name: String, source_row: Object (the full original import row keyed by source header), imported_from: String (OPTIONAL, v1.20 - the staged half of the transaction field of the same name; captured when the file is PARSED and copied onto the transaction on promotion, so provenance survives the staging firewall), source_index: Number (OPTIONAL, v1.21 - the row's 0-based position in the file it came from), batch_at: String (OPTIONAL, v1.21 - ISO instant the batch was staged, one value shared by every row of a file, never edited afterwards; ordered with source_index it is the order a reviewer's grid opens in. ABSENT means unknown rather than first: a row written before v1.21 sorts after every row that carries these, never at the top of a file it was not part of) }." />
-            <Column key="currency"
-                    type="String"
-                    description="ISO code; nullable until derived from the mapped account." />
-            <Column key="type"
-                    type="String"
-                    description="'income' | 'expense'; nullable until the category is mapped." />
-            <Column key="category_id"
-                    type="String"
-                    description="FK -> Categories; nullable until mapped." />
-            <Column key="sub_category_id"
-                    type="String"
-                    description="FK -> SubCategories; nullable until mapped." />
-            <Column key="entity_id"
-                    type="String"
-                    description="FK -> Entities; nullable." />
-            <Column key="account_id"
-                    type="String"
-                    description="FK -> Accounts; nullable until mapped." />
-            <Column key="member_id"
-                    type="String"
-                    description="FK -> Members; nullable until assigned." />
-            <Column key="status"
-                    type="String"
-                    description="'cleared' | 'pending'; the transaction status carried through to the promoted row." />
-        </Table>
-        <Table name="IMPORT_MAPPINGS"
-               key="IMPORT_MAPPINGS">
-            <Column key="id"
-                    type="String"
-                    description="Primary Key. Random, minted on the creating device. Deliberately NOT derived from the header: a digest of a low-entropy string like 'date' is reversible by wordlist, and deriving it is the one thing that would let the server correlate two families' bank files. Convergence is by client-side dedup on the decrypted header, never by id construction." />
-            <Field name="enc" type="String" nullable="false"
-                    description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { header: String (the source column header exactly as the file spelled it, kept for display), header_norm: String (the normalised key the memory matches on - lowercased, non-alphanumerics stripped, by the SAME normaliser the suggestion fallback uses, so the two can never disagree about what counts as the same column), verdict: String (either a target field name from the client's closed TARGET_FIELDS set, or the literal 'ignored' - a union, because remembering that a column is deliberately skipped is worth exactly as much as remembering what it maps to) }." />
-            <Column key="updated_at"
-                    type="String"
-                    description="Server-managed ISO instant. Also the dedup tiebreaker's first key: the newest row for a given header_norm wins, ties broken by the lexicographically smallest id." />
-            <Column key="deleted"
-                    type="Boolean"
-                    description="Soft-delete tombstone. A duplicate losing the dedup is tombstoned rather than removed, so every device converges on the same survivor without coordinating." />
-            <Column key="is_immutable"
-                    type="Boolean"
-                    description="Standard tenant-table flag; unused by this table today." />
-        </Table>
-    </DatabaseSchema>
+  
+  v1.26 (BREAKING + DESTRUCTIVE - budget ids leave the envelope): four plaintext columns join BUDGETS - `line_id`, `account_ids`, `ignored_category_ids` and `category_ids` - and the first three leave the encrypted envelope entirely. THE REASON IS THAT A SERVER CANNOT SCOPE WHAT IT CANNOT READ: a Budget's visibility to a family member is resolved from the accounts it aggregates, and BUDGETS was the only table whose foreign keys were sealed while TRANSACTIONS and STAGED_TRANSACTIONS carry `account_id` in plaintext. An opaque id discloses nothing those columns do not already disclose. `category_ids` is DIFFERENT IN KIND and deliberately so: it is a flattened UNION of every Area's categories, a projection of the envelope's per-Area grouping rather than a move out of it, so the server learns WHICH categories a Budget watches and never HOW THEY ARE GROUPED - the grouping is the plan, and the plan stays sealed. `area_id` is NOT promoted: it exists only inside `adjustments`, beside an amount, and is meaningless apart from it. Period bounds, `live`, targets, names, notes and every Area amount remain inside the envelope. DESTRUCTIVE because there is no mapping from an old row to a new one - the promoted fields are ciphertext the server cannot read, so it cannot rewrite them - and the rows are therefore deleted rather than transformed. Deploy is a coordinated server-then-client cut with no window in which the two versions coexist: a client emitting the new columns at an older server is rejected as an unknown key, which fails the whole batch.
+  
+  v1.27 (ADDITIVE - scope delivery): MEMBERS gains `scope_version`, a SERVER-OWNED integer that increments whenever the set of records a member is permitted to receive changes. IT EXISTS BECAUSE THE DELTA READ CANNOT DELIVER A CHANGE OF SCOPE: `read` returns rows whose `updated_at` is strictly greater than the caller's high-water mark, so widening what a member may see delivers nothing at all - every row they have just been permitted to read is older than their mark - and narrowing it delivers nothing either, because a row that is no longer sent is indistinguishable from a row that has not changed. A client that observes its own member row carrying a higher `scope_version` than the one it last recorded MUST clear its scoped local stores and re-pull that cycle from the beginning, which is the only operation that both delivers newly-permitted rows and drops newly-forbidden ones. The column is read-only on the wire: it is ignored/stripped on writes, and a client value for it would be a claim about the client's own permissions. -->
+<SchemaContract version="1.27">
+  <Meta>
+      <Description>Immutable Source of Truth for Backend API and Database Schema</Description>
+      <Usage>Paste this into the AI Context before generating any API or Data Fetching code.</Usage>
+      <Canonical>BearFunds-server · v1.27</Canonical>
+  </Meta>
+  <Protocol>
+    <Rule name="Endpoint">Single Entry Point (one POST endpoint). RESTful routes (GET /transactions) DO NOT exist.</Rule>
+    <Rule name="Method">POST only.</Rule>
+    <Rule name="Auth">Authorization: Bearer {JWT}. Each request carries a Supabase session JWT in the Authorization header. The legacy body "key" field is REMOVED. Unauthenticated/invalid-token requests return { status: 'error' }.</Rule>
+    <Rule name="Tenancy">family_id is SERVER-DERIVED from the authenticated session and applied server-side. A client-supplied family_id/user_id in the body is ignored/overwritten. Row-Level Security enforces per-family isolation as the backstop.</Rule>
+    <Rule name="Encryption">Row-Level Encryption (v1.14). Sensitive fields ride the per-row `enc` column: an opaque client-encrypted envelope "v1.{b64 iv}.{b64 ciphertext}" (AES-256-GCM, family key, AAD-bound to table:id). The server stores and returns `enc` verbatim, never inspects it, and REJECTS the removed plaintext keys as unknown. Keys never leave family devices; there is no server-side recovery.</Rule>
+    <Rule name="Concurrency">Client must use a Request Queue. Network calls are strictly serial.</Rule>
+    <Rule name="ErrorHandling">Strict. Error envelope: { status: 'error', code, message } where `code` is a closed enum - AUTH (401), VALIDATION (400/405, incl. unknown payload keys and malformed bodies), RLS_DENIED (403), CONFLICT (409), INTERNAL (500). Messages are fixed, leak-free texts: VALIDATION carries the authored validation detail; no raw database detail (table, policy, or constraint names) ever reaches the wire.</Rule>
+  </Protocol>
+  <Payloads>
+    <Action name="read">
+      <Description>Delta Sync. Returns rows modified since timestamp.</Description>
+      <Example><![CDATA[ { "action": "read", "table": "TRANSACTIONS", "since": "2024-01-01T00:00:00Z" } ]]></Example>
+    </Action>
+    <Action name="batchCreate">
+      <Description>Bulk Insert. ID is optional (generated by server if missing).</Description>
+      <Example><![CDATA[ { "action": "batchCreate", "table": "TRANSACTIONS", "rows": [ { "date": "2024-01-01", "enc": "v1.9k3f...==.q8Zx...==", "category_id": "..." } ] } ]]></Example>
+    </Action>
+    <Action name="batchUpdate">
+      <Description>Bulk Edit. Updates ONLY the specific keys provided.</Description>
+      <Example><![CDATA[ { "action": "batchUpdate", "table": "TRANSACTIONS", "updates": [ { "id": "uuid-1", "enc": "v1.7wPa...==.mB2c...==" } ] } ]]></Example>
+    </Action>
+    <Action name="batchUpsert">
+      <Description>Idempotent Save. Creates if ID missing, Updates if ID exists. Best for Seeding Test Data and sync creates.</Description>
+      <Example><![CDATA[ { "action": "batchUpsert", "table": "ACCOUNTS", "rows": [ { "id": "w001", "enc": "v1.f2Nc...==.tR7d...==", "currency": "EUR" } ] } ]]></Example>
+    </Action>
+    <Action name="wipe">
+      <Description>Destructive (Test Mode Only). Clears all data in the specified table for the caller's family.</Description>
+      <Example><![CDATA[ { "action": "wipe", "table": "TRANSACTIONS" } ]]></Example>
+    </Action>
+    <Action name="version">
+      <Description>Lightweight sync probe. Family-scoped; takes no table and no rows. Returns the family high-water mark = max(updated_at) across all tenant tables (or null when the family has no rows), so the client can check on app open whether anything changed since its last sync WITHOUT pulling every collection.</Description>
+      <Example><![CDATA[ Request: { "action": "version" } Response: { "status": "success", "data": { "version": "2026-06-29T10:15:00.000Z" } } ]]></Example>
+    </Action>
+  </Payloads>
+  <DatabaseSchema>
+    <Note>These are LOGICAL KEYS (snake_case). Do not use physical Table Headers.</Note>
+    <GlobalColumns>
+      <Column key="family_id"
+              type="String (UUID)"
+              sync="server-derived"
+              description="Tenancy key. Derived from the session; NEVER accepted from the client body. Present on all domain tables." />
+      <Column key="updated_at"
+              type="ISO String"
+              description="Auto-managed by Server (trigger)." />
+      <Column key="deleted"
+              type="Boolean"
+              description="Soft Delete flag." />
+      <Column key="is_immutable"
+              type="Boolean"
+              description="System object protection." />
+    </GlobalColumns>
+    <Table name="FAMILIES" key="FAMILIES">
+      <Column key="id"
+              type="String (UUID)"
+              description="Primary Key. Tenancy root." />
+      <Column key="name"
+              type="String"
+              description="Family display name." />
+      <Column key="created_at"
+              type="ISO String"
+              description="Server-managed creation timestamp." />
+    </Table>
+    <Table name="TRANSACTIONS" key="TRANSACTIONS">
+      <Column key="id"
+              type="String"
+              description="Primary Key as UUID, or special cases for 'immutable / test' logic" />
+      <Column key="date"
+              type="String"
+              description="ISO YYYY-MM-DD" />
+      <Column key="enc"
+              type="String"
+              description="Opaque encrypted envelope 'v1.{iv}.{ct}'. Plaintext JSON inside (client-only): { amount: Number (absolute value), description: String, tags: String[] (uppercase convention), imported_from: String (OPTIONAL, v1.20 - where the row came from, in words: a file name for an import, a sentence naming the feed and time for a future sync. Written once by whatever created the row and never edited. ABSENT means the transaction was entered by hand: every row written before v1.20 opens without it, permanently, so a reader must never render a placeholder in its place) }." />
+      <Column key="currency"
+              type="String"
+              description="ISO (EUR, USD)" />
+      <Column key="type"
+              type="String"
+              description="'income', 'expense'" />
+      <Column key="category_id"
+              type="String"
+              description="FK -> Categories" />
+      <Column key="sub_category_id"
+              type="String"
+              description="FK -> SubCategories" />
+      <Column key="entity_id"
+              type="String"
+              description="FK -> Entities" />
+      <Column key="account_id"
+              type="String"
+              description="FK -> Accounts" />
+      <Column key="member_id"
+              type="String"
+              description="FK -> Members" />
+      <Column key="status"
+              type="String"
+              description="'cleared', 'pending'" />
+    </Table>
+    <Table name="CATEGORIES" key="CATEGORIES">
+      <Column key="id"
+              type="String"
+              description="Primary Key, formatted as 'c001', or special cases for 'immutable' logic" />
+      <Column key="name"
+              type="String"
+              description="Display Name" />
+      <Column key="type"
+              type="String"
+              description="'income' or 'expense'" />
+      <Column key="icon"
+              type="String"
+              description="Emoji/Icon ID" />
+      <Column key="color"
+              type="String"
+              description="Hex Code" />
+      <Column key="description"
+              type="String"
+              description="Notes/Memo, optional" />
+    </Table>
+    <Table name="SUBCATEGORIES" key="SUBCATEGORIES">
+      <Column key="id"
+              type="String"
+              description="Primary Key, formatted as 'sc001', or special cases for 'immutable' logic" />
+      <Column key="category_id"
+              type="String"
+              description="FK -> Categories. Tenancy via the parent category." />
+      <Column key="name"
+              type="String"
+              description="Display Name" />
+      <Column key="is_default"
+              type="Boolean"
+              description="True for the permanent 'General' default of a user category (not renamable/deletable)." />
+    </Table>
+    <Table name="ACCOUNTS" key="ACCOUNTS">
+      <Column key="id"
+              type="String"
+              description="Primary Key, formatted as 'w001', or special cases for 'immutable' logic" />
+      <Column key="enc"
+              type="String"
+              description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { name: String (bank/account name), description: String }." />
+      <Column key="currency"
+              type="String"
+              description="ISO Code" />
+      <Column key="icon"
+              type="String" />
+    <Column key="color"
+              type="String" />
+    <Column key="is_default"
+              type="Boolean" />
+  </Table>
+    <Table name="BUDGETS" key="BUDGETS">
+      <Column key="id"
+              type="String"
+              description="Primary Key. Random, minted on the creating device. Never derived: convergence is by client-side dedup on the decrypted instructions, not by id construction." />
+      <Column key="enc"
+              type="String"
+              description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { live: Boolean (this line duplicates into the next period), period_start: String (ISO YYYY-MM-DD), period_end: String (ISO YYYY-MM-DD), target: Number (optional - what the family intends to spend or save this period; absent = the user skipped it, and the card then shows allocated vs actual only), areas: [{ id: String, name: String, amount: Number, category_ids: String[], icon: String (a lucide icon name; the Area's identity on every card. It is rendered in ONE colour - the Area's HEALTH - so no colour is chosen and none is stored. Optional on the wire and defaulted on read, so a row written without it still opens) }] (the plan; the Area amounts sum to the ALLOCATED total, which is derived and never stored. The per-Area category_ids are AUTHORITATIVE: the plaintext category_ids column is a flattened projection of them and never the source), adjustments: [{ area_id: String, amount: Number }] (period-local reallocations; they die with their period and are never duplicated forward), note: String (optional) }." />
+      <Column key="line_id"
+              type="String"
+              description="Groups the instances of one recurring Budget. Random, minted on the creating device and copied on duplication; it coordinates nothing, so two devices may hold different ids for the same period and the client collapses the twins by comparing decrypted instructions." />
+      <Column key="account_ids"
+              type="String[]"
+              description="The accounts this Budget aggregates. Plaintext because a Budget's visibility to a family member is resolved from it server-side. The first account selected fixes the Budget's currency, which is NEVER stored." />
+      <Column key="ignored_category_ids"
+              type="String[]"
+              description="Optional - categories this Budget DELIBERATELY does not watch. Every category no Area claims is otherwise reported as a planning gap; ignoring one records that the omission was a decision, so it stops being reported. It does NOT stop the money: spend in an ignored category still fails to move the Budget, and the unclaimed-SPEND figure still counts it. Per Budget, never global. Absent = none ignored." />
+      <Column key="category_ids"
+              type="String[]"
+              description="The union of every Area's category_ids, flattened. A PROJECTION of the envelope's per-Area grouping and never the source of truth: it records which categories a Budget watches and deliberately not how they are grouped. Rewritten whenever the plan is written." />            
+      <Column key="kind"
+              type="String"
+              description="'instance' - the only kind. Retained as a plaintext debuggability token and a forward hook; templates no longer exist." />
+      <Column key="period_type"
+              type="String"
+              description="'weekly', 'monthly', 'annual', 'one_off'. Plaintext for debuggability only; the server never computes over it." />
+    </Table>
+    <Table name="ENTITIES" key="ENTITIES">
+      <Column key="id"
+              type="String"
+              description="Primary Key, formatted as 'e001', or special cases for 'immutable' logic" />
+      <Column key="enc"
+              type="String"
+              description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { name: String, aliases: String[], match_patterns: String[] (regex strings) }." />
+      <Column key="default_category_id"
+              type="String" />
+      <Column key="default_sub_category_id"
+              type="String"
+              description="FK -> SubCategories" />
+      <Column key="icon"
+              type="String" />
+    <Column key="color"
+              type="String" />
+  </Table>
+    <Table name="MEMBERS" key="MEMBERS">
+      <Column key="id"
+              type="String"
+              description="Primary Key, formatted as 'm001', or special cases for 'immutable' logic" />
+      <Column key="name"
+              type="String" />
+      <Column key="role"
+              type="String"
+              description="'admin', 'member'" />
+      <Column key="user_id"
+              type="String"
+              description="Auth-user link. SERVER-DERIVED, read-only: present in reads, ignored/stripped on writes. The client derives 'Me' as the member whose user_id equals the session uid." />
+      <Column key="avatar"
+              type="String"
+              description="URL or Base64" />
+      <Column key="google_avatar"
+              type="String"
+              description="Google sign-in photo. SERVER-MANAGED, read-only: written by the sign-in trigger (handle_new_user), present in reads, ignored/stripped on writes. Render precedence is custom avatar -> google_avatar -> generated initials, so it is a default that never overwrites a custom avatar." />
+      <Column key="color"
+              type="String" />
+      <Column key="scope_version"
+              type="Number"
+              description="Monotonic counter of changes to what this member may receive. SERVER-OWNED, read-only: present in reads, ignored/stripped on writes. A client observing a value higher than the one it last recorded must clear its scoped local stores and re-pull from the beginning that cycle - a delta read can deliver neither a widened nor a narrowed scope." />
+    </Table>
+    <Table name="FAMILY_SETTINGS" key="FAMILY_SETTINGS">
+      <Column key="id"
+              type="String"
+              description="Primary Key. The FIXED literal 'family-settings' - one row per family, so every family writes the same id. The physical primary key is (family_id, id) per migration 0009, which is what stops the second family colliding into an RLS-denied upsert." />
+      <Column key="family_name"
+              type="String"
+              description="The family's display name, and the LIVE one. families.name is the sign-up default and never moves again; this is what a rename writes and what peek_invite reads, falling back to families.name for a family that has not written a settings row yet." />
+      <Column key="family_photo"
+              type="String"
+              description="A path to one of the bundled family avatars. Not user imagery: the client's picker is fed a fixed list and there is no upload path, so the value is a choice from a shipped set." />
+      <Column key="plan_type"
+              type="String"
+              description="The family's plan. SERVER-OWNED, read-only: present in reads, ignored/stripped on writes - the client may send it and is not answered. Deliberately PLAINTEXT and deliberately server-readable: it carries the constant 'Alpha Test' today and will carry feature controls and analytics, and a server that cannot read a plan cannot gate a feature on it. Nullable with no default: absent means the default tier." />
+      <Column key="date_format"
+              type="String"
+              description="Which way round a date reads for everyone in the family - 'dayFirst' or 'monthFirst'. A value outside that set is refused by the client and resolves to the default. Never reaches an ISO key: interchange stays yyyy-mm-dd." />
+    </Table>
+    <Table name="STAGED_TRANSACTIONS" key="STAGED_TRANSACTIONS">
+      <Column key="id"
+              type="String (UUID)"
+              description="Primary Key." />
+      <Column key="batch_id"
+              type="String (UUID)"
+              description="Groups all rows from one import run; enables bulk clear/delete of a batch." />
+      <Column key="date"
+              type="String"
+              description="ISO YYYY-MM-DD when resolved; may be empty/unparsed while staged." />
+      <Column key="enc"
+              type="String"
+              description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { amount: String (RAW import text; parsed to Number on promotion), description: String, tags: String[], source_account: String, source_category: String, source_name: String, source_row: Object (the full original import row keyed by source header), imported_from: String (OPTIONAL, v1.20 - the staged half of the transaction field of the same name; captured when the file is PARSED and copied onto the transaction on promotion, so provenance survives the staging firewall), source_index: Number (OPTIONAL, v1.21 - the row's 0-based position in the file it came from), batch_at: String (OPTIONAL, v1.21 - ISO instant the batch was staged, one value shared by every row of a file, never edited afterwards; ordered with source_index it is the order a reviewer's grid opens in. ABSENT means unknown rather than first: a row written before v1.21 sorts after every row that carries these, never at the top of a file it was not part of) }." />
+      <Column key="currency"
+              type="String"
+              description="ISO code; nullable until derived from the mapped account." />
+      <Column key="type"
+              type="String"
+              description="'income' | 'expense'; nullable until the category is mapped." />
+      <Column key="category_id"
+              type="String"
+              description="FK -> Categories; nullable until mapped." />
+      <Column key="sub_category_id"
+              type="String"
+              description="FK -> SubCategories; nullable until mapped." />
+      <Column key="entity_id"
+              type="String"
+              description="FK -> Entities; nullable." />
+      <Column key="account_id"
+              type="String"
+              description="FK -> Accounts; nullable until mapped." />
+      <Column key="member_id"
+              type="String"
+              description="FK -> Members; nullable until assigned." />
+      <Column key="status"
+              type="String"
+              description="'cleared' | 'pending'; the transaction status carried through to the promoted row." />
+    </Table>
+    <Table name="IMPORT_MAPPINGS" key="IMPORT_MAPPINGS">
+      <Column key="id"
+              type="String"
+              description="Primary Key. Random, minted on the creating device. Deliberately NOT derived from the header: a digest of a low-entropy string like 'date' is reversible by wordlist, and deriving it is the one thing that would let the server correlate two families' bank files. Convergence is by client-side dedup on the decrypted header, never by id construction." />
+      <Column key="enc"
+              type="String"
+              description="Opaque encrypted envelope. Plaintext JSON inside (client-only): { header: String (the source column header exactly as the file spelled it, kept for display), header_norm: String (the normalised key the memory matches on - lowercased, non-alphanumerics stripped, by the SAME normaliser the suggestion fallback uses, so the two can never disagree about what counts as the same column), verdict: String (either a target field name from the client's closed TARGET_FIELDS set, or the literal 'ignored' - a union, because remembering that a column is deliberately skipped is worth exactly as much as remembering what it maps to) }." />
+      <Column key="updated_at"
+              type="String"
+              description="Server-managed ISO instant. Also the dedup tiebreaker's first key: the newest row for a given header_norm wins, ties broken by the lexicographically smallest id." />
+      <Column key="deleted"
+              type="Boolean"
+              description="Soft-delete tombstone. A duplicate losing the dedup is tombstoned rather than removed, so every device converges on the same survivor without coordinating." />
+      <Column key="is_immutable"
+              type="Boolean"
+              description="Standard tenant-table flag; unused by this table today." />
+    </Table>
+  </DatabaseSchema>
 </SchemaContract>
