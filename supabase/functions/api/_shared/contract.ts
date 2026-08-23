@@ -89,8 +89,14 @@ export const PHYSICAL: Record<LogicalTable, string> = {
 // The key is stripped GLOBALLY because no other table declares a plan_type column, so a per-table
 // strip would be machinery with one member. If a second table ever carries one, this becomes a
 // per-table decision rather than a shared word.
+// `created_by` (migration 0024) is STRIPPED for the same reason `user_id` is: it names WHO,
+// it is derived from the session by a trigger, and a client value for it would be a claim
+// about identity. It is stripped rather than made non-writable ON PURPOSE - a non-writable
+// key makes sanitizeRow THROW and one such key killed every collection's sync on 2026-08-19,
+// whereas a strip drops silently and the trigger repopulates. The read path is unaffected:
+// the column comes back on pulled rows and the client simply has no adapter for it.
 export const STRIPPED_KEYS = new Set<string>([
-  "family_id", "user_id", "updated_at", "isDirty", "is_dirty", "plan_type",
+  "family_id", "user_id", "updated_at", "isDirty", "is_dirty", "plan_type", "created_by",
 ]);
 
 const GLOBAL_WRITABLE = ["id", "deleted", "is_immutable"];

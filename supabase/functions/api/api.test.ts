@@ -143,6 +143,41 @@ Deno.test("FAMILY_SETTINGS: plan_type is stripped, not rejected - the client may
   assert(!("plan_type" in req.rows[0]), "a forged plan must not reach the row the server writes");
 });
 
+// created_by (migration 0024) names WHO created a row, and the visibility predicate READS it -
+// a member sees back what she created, which is what lets INSERT ... RETURNING succeed under a
+// fail-closed read policy. So a client value for it would be a claim about identity that buys
+// visibility, and it is stripped exactly like user_id. Stripped rather than non-writable for the
+// same reason as plan_type: a non-writable key makes sanitizeRow THROW and takes the batch with
+// it, where a strip drops and the BEFORE INSERT trigger repopulates from the session.
+Deno.test("created_by is stripped on every table that carries it - it is a session fact, not a client one", () => {
+  for (const table of ["ACCOUNTS", "TRANSACTIONS", "STAGED_TRANSACTIONS"] as const) {
+    const req = parseRequest({
+      action: "batchUpsert", table,
+      rows: [{ id: "r1", enc: "v1.iv.ct", created_by: "m_someone_else" }],
+    });
+    if (req.action !== "batchUpsert") throw new Error("wrong action");
+    assert(!("created_by" in req.rows[0]), `${table}: a forged created_by must not reach the row`);
+    assertEquals(req.rows[0].id, "r1", `${table}: the rest of the row survives the strip`);
+    assertEquals(req.rows[0].enc, "v1.iv.ct", `${table}: the envelope survives the strip`);
+  }
+});
+
+// CONTROL: the strip is a DROP, not a rejection. A key the contract does not know at all still
+// throws - which is the property that tells "silently ignored" apart from "quietly accepted",
+// and the reason the assertion above is meaningful rather than vacuous.
+Deno.test("CONTROL: an unknown key still throws, so the strip above is a drop and not a shrug", () => {
+  let threw = false;
+  try {
+    parseRequest({
+      action: "batchUpsert", table: "ACCOUNTS",
+      rows: [{ id: "r1", enc: "v1.iv.ct", not_a_real_column: "x" }],
+    });
+  } catch {
+    threw = true;
+  }
+  assert(threw, "an undeclared key must still be refused");
+});
+
 Deno.test("SUBCATEGORIES: strips server keys, keeps writable (category_id,name,is_default)", () => {
   const req = parseRequest({
     action: "batchUpsert", table: "SUBCATEGORIES",

@@ -898,20 +898,77 @@ do $t$ begin
          'CONTROL: a member CAN still write a row she can see';
 end $t$;
 
--- (d) and she can still CREATE, which is the one part of the D4 intent that survives:
---     WITH CHECK is family-scoped, so an INSERT is not gated on visibility.
-insert into public.accounts (id, currency, enc) values ('w_carol', 'EUR', 'v1.iv_cw.ct_carol');
-do $t$ begin
-  assert (select count(*) from public.accounts where id = 'w_carol') = 0,
-         'a member creating an account cannot then SEE it - the zero-account member state, '
-         'and the reason created_by is owed by the eviction slice';
+-- (d) CREATION IN THE CLIENT'S OWN SHAPE. supabase-js `upsert(rows).select()` emits
+--     INSERT ... ON CONFLICT ... RETURNING, and RETURNING RE-READS the row under the SELECT
+--     policy - so this is the assertion that decides whether a member can use the app at all.
+--     Under 0023 alone it was REFUSED (42501, row not written); 0024's created_by is what
+--     makes it pass, because a row's own column is the only thing a STABLE predicate can see
+--     inside the same statement. Asserted in the client's shape rather than the convenient
+--     one: an earlier version used a bare insert and "proved" a permissiveness the app can
+--     never reach.
+do $t$
+declare n int;
+begin
+  with ins as (
+    insert into public.accounts (id, currency, enc) values ('w_carol', 'EUR', 'v1.iv_cw.ct_carol')
+    on conflict (family_id, id) do update set enc = excluded.enc
+    returning *
+  ) select count(*) into n from ins;
+  assert n = 1, 'the CLIENT-SHAPED create returns the row it wrote';
+  assert (select count(*) from public.accounts where id = 'w_carol') = 1,
+         'and the member can read back the account she just created';
 end $t$;
+
+-- (e) THE NEGATIVE CONTROL FOR (d), and it is the one that matters. The creator arm is an OR
+--     into a fail-closed predicate, so the question is not whether it lets her see her own
+--     row - it is whether it let anything else through with it.
+do $t$ begin
+  assert not exists (select 1 from public.accounts where id = 'w_private'),
+         'CONTROL: creating her own account did NOT reveal the admin private account';
+  assert (select count(*) from public.accounts) = 2,
+         'CONTROL: she sees exactly the granted account and the one she created, nothing more';
+end $t$;
+
+-- (f) created_by IS SERVER-DERIVED. A supplied value must be overwritten, not honoured - an
+--     earlier draft of the trigger used coalesce() and THIS control caught it: a forged value
+--     survived, which would have let a member hand visibility of a new row to someone else.
+insert into public.accounts (id, currency, enc, created_by)
+  values ('w_forge', 'EUR', 'v1.iv_fg.ct_forge', 'm_someone_else');
 reset role; reset request.jwt.claims;
 do $t$ begin
-  assert (select status from public.transactions where id = 't_private') is null,
-         'and the invisible row was never modified';
-  assert (select count(*) from public.accounts where id = 'w_carol') = 1,
-         'CONTROL: the row Carol created really exists - she just cannot read it back';
+  assert (select created_by from public.accounts where id = 'w_forge') <> 'm_someone_else',
+         'a client-supplied created_by must be overwritten by the session value';
+  assert (select created_by from public.accounts where id = 'w_forge')
+       = (select carol_member from vis),
+         'and it must be the CALLER, derived from the session like family_id';
+end $t$;
+
+-- (g) WRITE-ONCE, ENFORCED BY PRESERVING RATHER THAN RAISING. A raise would turn one row into
+--     a failed batch and take the sync with it, which is the failure shape this repo has paid
+--     for twice. The old value is silently restored instead.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+update public.accounts set created_by = 'm_hijack' where id = 'w_forge';
+reset role; reset request.jwt.claims;
+do $t$ begin
+  assert (select created_by from public.accounts where id = 'w_forge') = (select carol_member from vis),
+         'created_by survives an update attempt unchanged, and the update itself did not error';
+end $t$;
+
+-- (h) A NULL-ACCOUNT ROW IS VISIBLE TO ITS AUTHOR AND TO NOBODY ELSE. This is the staged-import
+--     case: a row before classification names no account, so it can be attributed to none, and
+--     under 0023 alone it was hidden from the member who created it.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000c"}';
+insert into public.transactions (id, date, currency, type, account_id, enc)
+  values ('t_carol_noacct', '2026-08-10', 'EUR', 'expense', null, 'v1.iv_cn.ct_cn');
+insert into public.staged_transactions (id, batch_id, date, currency, type, account_id, status, enc)
+  values ('s_carol_noacct', 'batch2', '2026-08-10', 'EUR', 'expense', null, 'staged', 'v1.iv_sn.ct_sn');
+do $t$ begin
+  assert exists (select 1 from public.transactions where id = 't_carol_noacct'),
+         'a member sees her own unclassified transaction';
+  assert exists (select 1 from public.staged_transactions where id = 's_carol_noacct'),
+         'and her own staged import row';
+  assert not exists (select 1 from public.transactions where id = 't_noacct'),
+         'CONTROL: but NOT the admin unclassified row - the arm is authorship, not null-ness';
 end $t$;
 
 -- ============ Revocation removes the grant (and evicts nothing) ============
@@ -925,9 +982,18 @@ end $t$;
 reset role; reset request.jwt.claims;
 
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000c"}';
+-- REVOCATION TAKES THE GRANT AND LEAVES WHAT SHE CREATED. That asymmetry is the point rather
+-- than a side effect: "rows the member created stay available" is what makes the eventual lock
+-- proportionate instead of punitive, and it falls out of created_by for free.
 do $t$ begin
-  assert (select count(*) from public.accounts) = 0, 'after revocation the server sends nothing';
-  assert (select count(*) from public.transactions) = 0, 'and the derived rows go with it';
+  assert not exists (select 1 from public.accounts where id = 'w_shared'),
+         'after revocation the granted account is no longer sent';
+  assert not exists (select 1 from public.transactions where id = 't_shared'),
+         'and its derived transactions go with it';
+  assert exists (select 1 from public.accounts where id = 'w_carol'),
+         'but the account she created herself stays - revocation is not confiscation';
+  assert exists (select 1 from public.transactions where id = 't_carol_noacct'),
+         'as does her own unclassified row';
 end $t$;
 reset role; reset request.jwt.claims;
 
