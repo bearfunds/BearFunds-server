@@ -43,17 +43,26 @@ Deno.test("RLE: plaintext sensitive keys are rejected per table", () => {
     ["STAGED_TRANSACTIONS", { id: "st1", amount: "-1,5" }],
     ["STAGED_TRANSACTIONS", { id: "st1", source_row: "{}" }],
     ["STAGED_TRANSACTIONS", { id: "st1", source_name: "x" }],
-    // BUDGETS (v1.17): the WHOLE plan rides enc - name, target, Areas, category + account
-    // membership, the period bounds AND the recurring line id. The only writable plaintext left is
-    // kind + period_type.
+    // BUDGETS (v1.26): the PAYLOAD rides enc - name, amount, target, note and the period bounds.
+    // The four IDS do not: line_id, account_ids, ignored_category_ids and category_ids are plaintext
+    // columns, because a server cannot scope what it cannot read and a Budget's visibility resolves
+    // from the accounts it aggregates. They are therefore absent from this list by contract.
+    //
+    // `areas` STAYS SEALED AND THAT IS THE WHOLE DISTINCTION. category_ids is a FLATTENED UNION of
+    // every Area's categories - a projection, not a move out of the envelope - so the server learns
+    // WHICH categories a Budget watches and never HOW THEY ARE GROUPED. The grouping is the plan,
+    // and the plan stays sealed (migration 0022).
+    //
+    // THE ACCEPTANCE HALF IS WITNESSED ELSEWHERE, so do not re-add the four ids here inverted into
+    // accept-assertions: contractTables.test.ts holds "every client-writable column the contract
+    // declares is ACCEPTED by the seam", with its subject list DERIVED from the contract XML. A
+    // hand-typed copy here would be a second, hand-maintained version of a property already derived
+    // from the one artifact both repos share.
     ["BUDGETS", { id: "b1", name: "Groceries" }],
     ["BUDGETS", { id: "b1", amount: 400 }],
     ["BUDGETS", { id: "b1", target: 2000 }],
     ["BUDGETS", { id: "b1", note: "new coffee machine" }],
-    ["BUDGETS", { id: "b1", category_ids: "[\"c1\"]" }],
-    ["BUDGETS", { id: "b1", account_ids: "[\"w1\"]" }],
     ["BUDGETS", { id: "b1", areas: "[]" }],
-    ["BUDGETS", { id: "b1", line_id: "line_1" }],
     // The v1 plaintext columns. These are the keys a STALE DEPLOYED CLIENT would send, and the
     // rejection is exactly what makes that failure loud instead of silent - which is why the
     // server and client ship in one coordinated deploy.
