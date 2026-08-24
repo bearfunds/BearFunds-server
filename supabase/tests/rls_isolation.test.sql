@@ -804,39 +804,48 @@ do $t$ begin
   assert (select count(*) from public.account_access) = 0, 'a member cannot read the grant ledger';
 end $t$;
 
--- A member cannot grant themselves anything.
+-- A MEMBER CANNOT GRANT HERSELF ANYTHING, AND SINCE 0026 THE WRITE POLICY IS WHAT SAYS SO.
+-- Authoring moved onto the sync plane, so there is no admin-gated function left to refuse the
+-- call: the refusal is the policy WITH CHECK, and a member INSERT raises 42501 exactly as an
+-- invisible row upsert does. Written in the shape the client push actually emits, per the
+-- lesson at (d) below - a bare insert would prove a permissiveness the app can never reach.
 do $t$
 declare raised boolean := false;
 begin
   begin
-    perform public.grant_account_access('w_private', (select carol_member from vis));
+    insert into public.account_access (id, account_id, member_id)
+      values ('w_private__' || (select carol_member from vis), 'w_private', (select carol_member from vis))
+      on conflict (family_id, id) do update set deleted = false;
   exception when others then
     raised := true;
   end;
-  assert raised, 'a member calling grant_account_access must be refused';
+  assert raised, 'a member writing her own grant row must be refused';
   assert (select count(*) from public.accounts) = 0, 'and the refusal changed nothing';
 end $t$;
 reset role; reset request.jwt.claims;
 
--- ============ Alice grants ONE account ============
+-- ============ Alice grants ONE account, as an ordinary synced row (0026) ============
+-- THE ID IS DETERMINISTIC: '<account_id>__<member_id>'. Two admins granting the same pair while
+-- offline therefore mint the SAME row rather than two, so the pair converges under last-write-wins
+-- instead of duplicating. import_mappings refused a deterministic id (0018) because a digest of a
+-- low-entropy header would publish the shape of a family bank file; nothing is disclosed here,
+-- because both halves of this id are already plaintext columns on the row it names.
+--
+-- THE EXISTENCE CHECKS ARE GONE AND THAT IS DELIBERATE. The RPC refused a grant naming an account
+-- this family does not hold. On the sync plane a refusal is a 42501 that takes the whole
+-- batchUpsert with it - the 2026-08-19 shape this repo has paid for twice - so a dangling grant is
+-- written and is INERT instead: family_id is server-derived, so the row can only ever name an id
+-- inside the caller own family, and an id no account there carries resolves to nothing. The client
+-- reconciles orphans out of what it renders (accessModel.visibleGrantedAccountIds). The tenancy
+-- property the check used to carry is asserted directly in the cross-family section below.
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+insert into public.account_access (id, account_id, member_id, granted_by_member_id)
+  values ('w_shared__' || (select carol_member from vis), 'w_shared', (select carol_member from vis), 'm_forged');
 do $t$ begin
-  perform public.grant_account_access('w_shared', (select carol_member from vis));
   assert (select count(*) from public.account_access) = 1, 'the admin can read the grant she just made';
   assert (select granted_by_member_id from public.account_access) = (select alice_member from vis),
-         'granted_by is server-derived from the caller, never supplied';
-end $t$;
-
--- A grant naming an account outside the family, or a member outside it, is refused rather
--- than silently written - a dangling grant row would read as an access decision nobody made.
-do $t$
-declare raised boolean := false;
-begin
-  begin
-    perform public.grant_account_access('w_b1', (select carol_member from vis));
-  exception when others then raised := true;
-  end;
-  assert raised, 'granting an account that is not in this family must be refused';
+         'granted_by is server-derived from the caller, and a SUPPLIED value is overwritten rather than honoured';
+  assert (select deleted from public.account_access) = false, 'and a new grant is live';
 end $t$;
 reset role; reset request.jwt.claims;
 
@@ -971,14 +980,34 @@ do $t$ begin
          'CONTROL: but NOT the admin unclassified row - the arm is authorship, not null-ness';
 end $t$;
 
--- ============ Revocation removes the grant (and evicts nothing) ============
-set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+-- ============ Revocation is a TOMBSTONE, and evicts nothing ============
+-- A MEMBER CANNOT REVOKE HER OWN GRANT EITHER, AND THIS ARM FAILS DIFFERENTLY FROM THE INSERT
+-- ONE. The policy USING clause is admin-only, so the row is invisible to her and the UPDATE
+-- matches nothing - SILENTLY, the same shape as (a) above. Both halves are asserted because a
+-- policy narrowed on only one of them would leave the other open and nothing would say so.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000c"}';
+update public.account_access set deleted = true where account_id = 'w_shared';
+reset role; reset request.jwt.claims;
 do $t$ begin
-  perform public.revoke_account_access('w_shared', (select carol_member from vis));
-  assert (select count(*) from public.account_access) = 0, 'the grant is gone';
-  -- Idempotent: revoking twice is the same end state, and a UI that double-fires must not error.
-  perform public.revoke_account_access('w_shared', (select carol_member from vis));
+  assert (select deleted from public.account_access where account_id = 'w_shared') = false,
+         'a member UPDATE on the grant ledger matched nothing - her own grant is still live';
 end $t$;
+
+-- THE REVOKE ITSELF. A hard delete leaves no tombstone and a delta read cannot express a row that
+-- is simply gone, so the admin device would never learn the grant had been withdrawn. Soft delete
+-- is what makes revocation deliverable on the sync plane at all.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+update public.account_access set deleted = true
+  where id = 'w_shared__' || (select carol_member from vis);
+do $t$ begin
+  assert (select count(*) from public.account_access where not deleted) = 0, 'the grant is gone';
+  assert (select count(*) from public.account_access) = 1,
+         'but the ROW survives as a tombstone - which is the only way the withdrawal reaches another device';
+end $t$;
+-- Idempotent: re-writing the same tombstone is the same end state, and a UI that double-fires
+-- must not error. The scope_version section below asserts it does not BUMP either.
+update public.account_access set deleted = true
+  where id = 'w_shared__' || (select carol_member from vis);
 reset role; reset request.jwt.claims;
 
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000c"}';
@@ -1008,27 +1037,49 @@ do $t$ begin
          'and nobody else moved - a bump is per MEMBER, not per family';
 end $t$;
 
--- IDEMPOTENT CALLS MUST NOT BUMP, and this is load-bearing rather than tidy: the client answers
+-- IDEMPOTENT WRITES MUST NOT BUMP, and this is load-bearing rather than tidy: the client answers
 -- a bump by DELETING local rows, so a re-grant of what is already granted would cost a member a
--- clear-and-refetch for no reason. grant is `on conflict do nothing` and revoke is a delete, so
--- both can legitimately be no-ops - FOUND is what tells them apart.
+-- clear-and-refetch for no reason.
+--
+-- THE DISCRIMINATOR CHANGED WITH THE MECHANISM, AND THAT IS THE WHOLE RISK OF 0026. The RPC could
+-- ask FOUND, because `on conflict do nothing` and `delete` each either touched a row or did not. A
+-- trigger has no FOUND: it fires on every INSERT and every UPDATE, including the ordinary
+-- ON CONFLICT DO UPDATE the client emits on EVERY push for a row that has not changed. So the
+-- discrimination moved into the trigger WHEN clause - a live INSERT, or an UPDATE in which
+-- `deleted` actually transitions. Without it every routine re-push would evict the member.
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
 do $t$
 declare before_v integer;
+declare grant_id text := 'w_shared__' || (select carol_member from vis);
 begin
   select scope_version into before_v from public.members where id = (select carol_member from vis);
 
-  perform public.revoke_account_access('w_shared', (select carol_member from vis));
+  update public.account_access set deleted = true where id = grant_id;
   assert (select scope_version from public.members where id = (select carol_member from vis)) = before_v,
-         'revoking what is not granted changes nothing and must NOT bump';
+         'revoking what is already revoked changes nothing and must NOT bump';
 
-  perform public.grant_account_access('w_shared', (select carol_member from vis));
+  update public.account_access set deleted = false where id = grant_id;
   assert (select scope_version from public.members where id = (select carol_member from vis)) = before_v + 1,
-         'CONTROL: a real grant DOES bump - so the assert above is not passing because bumps never happen';
+         'CONTROL: a real re-grant DOES bump - so the assert above is not passing because bumps never happen';
 
-  perform public.grant_account_access('w_shared', (select carol_member from vis));
+  update public.account_access set deleted = false where id = grant_id;
   assert (select scope_version from public.members where id = (select carol_member from vis)) = before_v + 1,
          'and re-granting what is already granted must NOT bump';
+
+  -- THE ONE THE RPC NEVER HAD TO SURVIVE. Every push re-sends the whole outbox row, so an
+  -- unchanged grant arrives as an upsert over and over. This is the client push shape verbatim.
+  insert into public.account_access (id, account_id, member_id)
+    values (grant_id, 'w_shared', (select carol_member from vis))
+    on conflict (family_id, id) do update set account_id = excluded.account_id, deleted = excluded.deleted;
+  assert (select scope_version from public.members where id = (select carol_member from vis)) = before_v + 1,
+         'an idempotent re-UPSERT of an unchanged grant must NOT bump - a routine push must not evict anybody';
+
+  -- A grant that arrives ALREADY tombstoned is a member who never had it: nothing to withdraw,
+  -- nothing to deliver. An INSERT arm that bumped unconditionally would evict on this row.
+  insert into public.account_access (id, account_id, member_id, deleted)
+    values ('w_private__' || (select carol_member from vis), 'w_private', (select carol_member from vis), true);
+  assert (select scope_version from public.members where id = (select carol_member from vis)) = before_v + 1,
+         'and an INSERT of an already-tombstoned grant must NOT bump either';
 end $t$;
 
 reset role; reset request.jwt.claims;
@@ -1040,12 +1091,26 @@ reset role; reset request.jwt.claims;
 -- transaction and set_updated_at stamps now(), which is transaction-constant - so "read the
 -- stamp, act, read it again" compares a value to itself and fails against a working trigger.
 -- Backdating the row first gives the trigger something to visibly move.
+--
+-- THE BACKDATE HAS TO DISABLE members_set_updated_at, AND WITHOUT THAT THIS WHOLE BLOCK WAS A
+-- CHECK THAT COULD NOT FAIL (found 2026-08-25 while rewriting the section for 0026). That trigger
+-- is `before insert or update` and assigns `new.updated_at := now()` UNCONDITIONALLY, so the
+-- backdate below was overwritten by the very statement that wrote it. Both asserts then held
+-- whatever the grant plane did - including if it did nothing at all - because now() is
+-- transaction-constant and the row already carried it. The disable is what gives the assert
+-- something it can be wrong about; the CONTROL after it proves the backdate actually landed.
+alter table public.members disable trigger members_set_updated_at;
 update public.members set updated_at = '2000-01-01T00:00:00Z'
   where id = (select carol_member from vis);
-set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+alter table public.members enable trigger members_set_updated_at;
 do $t$ begin
-  perform public.revoke_account_access('w_shared', (select carol_member from vis));
+  assert (select updated_at from public.members where id = (select carol_member from vis))
+         = '2000-01-01T00:00:00Z'::timestamptz,
+         'CONTROL: the backdate took - otherwise the two asserts below cannot fail';
 end $t$;
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+update public.account_access set deleted = true
+  where id = 'w_shared__' || (select carol_member from vis);
 reset role; reset request.jwt.claims;
 do $t$ begin
   assert (select updated_at from public.members where id = (select carol_member from vis))
@@ -1068,21 +1133,33 @@ do $t$ begin
 end $t$;
 reset role; reset request.jwt.claims;
 
--- ============ Cross-family: the grant plane respects tenancy ============
+-- ============ Cross-family: the grant plane respects tenancy (0026) ============
+-- THE RPC USED TO REFUSE THIS AND NOW THERE IS NOTHING TO REFUSE, WHICH IS A STRONGER PROPERTY
+-- RATHER THAN A WEAKER ONE. family_id is derived by the same set_family_id trigger every tenant
+-- table has used since 0001, so a row Bob writes naming an account id out of Alice family lands in
+-- BOB family and grants nothing to anybody. Tenancy is a property of the write path here, not a
+-- check inside a function that a second writer could bypass - and there is no second writer now.
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
-do $t$
-declare raised boolean := false;
-begin
-  begin
-    perform public.grant_account_access('w_shared', (select carol_member from vis));
-  exception when others then raised := true;
-  end;
-  assert raised, 'Bob cannot grant access to an account in Alice family';
-end $t$;
+insert into public.account_access (id, account_id, member_id, family_id)
+  values ('w_shared__cross', 'w_shared', (select carol_member from vis), (select fam_a from vis));
 reset role; reset request.jwt.claims;
 do $t$ begin
-  assert (select count(*) from public.account_access) = 0, 'and nothing was written';
+  assert (select family_id from public.account_access where id = 'w_shared__cross')
+       = (select family_id from fam where who = 'B'),
+         'Bob grant landed in HIS family, and a SUPPLIED family_id was overwritten rather than honoured';
+  assert (select count(*) from public.account_access
+           where family_id = (select fam_a from vis) and not deleted) = 0,
+         'and Alice family ledger is untouched - every grant in it is a tombstone by now';
 end $t$;
+
+-- AND IT CONFERRED NOTHING, which is the assert that matters: the row exists, names a real account
+-- id, and is inert because the id belongs to a family the row is not in.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000c"}';
+do $t$ begin
+  assert not exists (select 1 from public.accounts where id = 'w_shared'),
+         'Carol still cannot see w_shared - a grant row in another family reaches her not at all';
+end $t$;
+reset role; reset request.jwt.claims;
 
 -- ============ D5: an account-less budget is an impossible state ============
 -- The client already refuses to save one; this is the schema agreeing with the form. It

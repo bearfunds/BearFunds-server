@@ -42,9 +42,19 @@
 // only inside adjustments, beside an amount. Period bounds, targets, names, notes and Area amounts
 // stay sealed - this reopens the LINE-ID half of v1.17 and not the bounds half. Rows are WIPED by
 // migration 0022 (pre-alpha; every existing Budget is test data).
+// v1.28 (ADDITIVE): ACCOUNT_ACCESS - the per-member account grant ledger, which becomes a synced
+// collection. It had no contract surface at all until now, and that was a decision rather than an
+// omission: migration 0023 D2 kept grants on an RPC control plane because a synced grant row merges
+// last-write-wins, so a revocation can lose a race to a stale device re-pushing an older grant.
+// That objection is unchanged and is ACCEPTED rather than solved (operator, 2026-08-24) - this
+// model is a trust boundary and not a security one, LWW is how every other row here behaves, and
+// co-equal admins are out of scope for the alpha. What it buys is that sharing stops being the one
+// admin action in the app requiring connectivity at the instant of Save. Migration 0026 moves the
+// enforcement onto the write path: admin-only on BOTH sides of one policy, granted_by server-
+// derived by trigger, and the scope_version bump WHEN-guarded so a routine re-push cannot evict.
 export type LogicalTable =
   | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "ACCOUNTS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS"
-  | "BUDGETS" | "IMPORT_MAPPINGS" | "FAMILY_SETTINGS";
+  | "BUDGETS" | "IMPORT_MAPPINGS" | "FAMILY_SETTINGS" | "ACCOUNT_ACCESS";
 
 export const PHYSICAL: Record<LogicalTable, string> = {
   TRANSACTIONS: "transactions",
@@ -57,6 +67,7 @@ export const PHYSICAL: Record<LogicalTable, string> = {
   BUDGETS: "budgets",
   IMPORT_MAPPINGS: "import_mappings",
   FAMILY_SETTINGS: "family_settings",
+  ACCOUNT_ACCESS: "account_access",
 };
 
 // Server-managed / client-derived keys: silently removed from any inbound row.
@@ -100,9 +111,16 @@ export const PHYSICAL: Record<LogicalTable, string> = {
 // scoped local stores and re-pulling; a client value for it would be a claim about its own
 // permissions, and a false one would either suppress a needed re-pull or force a needless
 // delete. Stripped rather than non-writable for the reason the two entries above share.
+// `granted_by_member_id` (migration 0026, contract v1.28) is the third key stripped for the reason
+// `user_id` and `created_by` are: it names WHO, it is derived from the session by a trigger, and a
+// client value for it would be a claim about identity - here, a claim about who authorised a
+// permission, which is the one field on that row worth forging. Stripped rather than made
+// non-writable for the reason the whole group shares: a non-writable key makes sanitizeRow THROW
+// and one such key killed every collection's sync on 2026-08-19, whereas a strip drops silently and
+// the trigger repopulates. The read path is unaffected - it comes back on pulled rows.
 export const STRIPPED_KEYS = new Set<string>([
   "family_id", "user_id", "updated_at", "isDirty", "is_dirty", "plan_type", "created_by",
-  "scope_version",
+  "scope_version", "granted_by_member_id",
 ]);
 
 const GLOBAL_WRITABLE = ["id", "deleted", "is_immutable"];
@@ -204,6 +222,21 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
   // and a server-side setter writes real values when feature controls land.
   FAMILY_SETTINGS: new Set([
     ...GLOBAL_WRITABLE, "family_name", "family_photo", "date_format",
+  ]),
+  // ACCOUNT_ACCESS carries exactly two keys of its own, and BOTH are plaintext by necessity rather
+  // than by the house rule: the server resolves visibility from them, and a server cannot scope
+  // what it cannot read. That is the same argument v1.26 made when the budget ids left the
+  // envelope, applied to the table those ids are scoped against.
+  //
+  // `deleted` IS THE REVOCATION, not housekeeping. It arrives through GLOBAL_WRITABLE like every
+  // other tombstone, and on this table it is the only mechanism a withdrawal has: a hard delete
+  // leaves nothing for a delta read to carry, so a second admin device would never learn of it.
+  //
+  // `granted_by_member_id` is absent here ON PURPOSE - it is server-derived and sits in
+  // STRIPPED_KEYS above. The contract declares it as stripped on writes, so the client's
+  // tests/adapterContract ARM 2 fails by name if an adapter ever starts sending it.
+  ACCOUNT_ACCESS: new Set([
+    ...GLOBAL_WRITABLE, "account_id", "member_id",
   ]),
 };
 

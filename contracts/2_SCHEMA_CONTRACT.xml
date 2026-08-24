@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<!-- Canonical: BearFunds-server - v1.27
+<!-- Canonical: BearFunds-server - v1.28
   This repo is the canonical home for the shared client<->server Schema Contract
   (re-home decided in the brain's Sources of Truth, 2026-06-01; executed 2026-06-02).
   It is NOT casually editable. Any change is a deliberate version bump with a one-line
@@ -31,12 +31,14 @@
   
   v1.26 (BREAKING + DESTRUCTIVE - budget ids leave the envelope): four plaintext columns join BUDGETS - `line_id`, `account_ids`, `ignored_category_ids` and `category_ids` - and the first three leave the encrypted envelope entirely. THE REASON IS THAT A SERVER CANNOT SCOPE WHAT IT CANNOT READ: a Budget's visibility to a family member is resolved from the accounts it aggregates, and BUDGETS was the only table whose foreign keys were sealed while TRANSACTIONS and STAGED_TRANSACTIONS carry `account_id` in plaintext. An opaque id discloses nothing those columns do not already disclose. `category_ids` is DIFFERENT IN KIND and deliberately so: it is a flattened UNION of every Area's categories, a projection of the envelope's per-Area grouping rather than a move out of it, so the server learns WHICH categories a Budget watches and never HOW THEY ARE GROUPED - the grouping is the plan, and the plan stays sealed. `area_id` is NOT promoted: it exists only inside `adjustments`, beside an amount, and is meaningless apart from it. Period bounds, `live`, targets, names, notes and every Area amount remain inside the envelope. DESTRUCTIVE because there is no mapping from an old row to a new one - the promoted fields are ciphertext the server cannot read, so it cannot rewrite them - and the rows are therefore deleted rather than transformed. Deploy is a coordinated server-then-client cut with no window in which the two versions coexist: a client emitting the new columns at an older server is rejected as an unknown key, which fails the whole batch.
   
-  v1.27 (ADDITIVE - scope delivery): MEMBERS gains `scope_version`, a SERVER-OWNED integer that increments whenever the set of records a member is permitted to receive changes. IT EXISTS BECAUSE THE DELTA READ CANNOT DELIVER A CHANGE OF SCOPE: `read` returns rows whose `updated_at` is strictly greater than the caller's high-water mark, so widening what a member may see delivers nothing at all - every row they have just been permitted to read is older than their mark - and narrowing it delivers nothing either, because a row that is no longer sent is indistinguishable from a row that has not changed. A client that observes its own member row carrying a higher `scope_version` than the one it last recorded MUST clear its scoped local stores and re-pull that cycle from the beginning, which is the only operation that both delivers newly-permitted rows and drops newly-forbidden ones. The column is read-only on the wire: it is ignored/stripped on writes, and a client value for it would be a claim about the client's own permissions. -->
-<SchemaContract version="1.27">
+  v1.27 (ADDITIVE - scope delivery): MEMBERS gains `scope_version`, a SERVER-OWNED integer that increments whenever the set of records a member is permitted to receive changes. IT EXISTS BECAUSE THE DELTA READ CANNOT DELIVER A CHANGE OF SCOPE: `read` returns rows whose `updated_at` is strictly greater than the caller's high-water mark, so widening what a member may see delivers nothing at all - every row they have just been permitted to read is older than their mark - and narrowing it delivers nothing either, because a row that is no longer sent is indistinguishable from a row that has not changed. A client that observes its own member row carrying a higher `scope_version` than the one it last recorded MUST clear its scoped local stores and re-pull that cycle from the beginning, which is the only operation that both delivers newly-permitted rows and drops newly-forbidden ones. The column is read-only on the wire: it is ignored/stripped on writes, and a client value for it would be a claim about the client's own permissions.
+  
+  v1.28 (ADDITIVE - the grant plane joins the sync plane): ACCOUNT_ACCESS becomes a synced collection. An admin grants a member sight of an account by writing a row, and it reaches the server through the action endpoint like every other edit. IT WAS DELIBERATELY ABSENT UNTIL NOW: migration 0023 gave the grant ledger no contract surface at all, on the grounds that a synced grant row merges last-write-wins and a revocation could lose a race to a stale device re-pushing an older grant. That objection is unchanged and is accepted rather than solved - this model is a TRUST boundary and not a security one, last-write-wins is how every other row here already behaves, and co-equal admins are out of scope for the alpha. What it buys is offline-first consistency: sharing was the only admin action in the app that demanded connectivity at the instant of Save. THREE PROPERTIES A CLIENT MUST HONOUR. The id is DERIVED, `<account_id>__<member_id>`, so two admins granting the same pair while offline mint one row rather than two; nothing is disclosed by it, because both halves are already plaintext columns on the row it names. Revocation is a SOFT DELETE and never a removal - a delta read cannot express a row that is simply gone, so a hard delete would never reach a second admin device. And the collection reads EMPTY for every non-admin by design (RLS is admin-only on this table), which is the information this feature withholds rather than a fault to be reported. `granted_by_member_id` is server-derived and write-once, stripped on writes like `created_by`.  -->
+<SchemaContract version="1.28">
   <Meta>
       <Description>Immutable Source of Truth for Backend API and Database Schema</Description>
       <Usage>Paste this into the AI Context before generating any API or Data Fetching code.</Usage>
-      <Canonical>BearFunds-server · v1.27</Canonical>
+      <Canonical>BearFunds-server · v1.28</Canonical>
   </Meta>
   <Protocol>
     <Rule name="Endpoint">Single Entry Point (one POST endpoint). RESTful routes (GET /transactions) DO NOT exist.</Rule>
@@ -322,6 +324,26 @@
       <Column key="deleted"
               type="Boolean"
               description="Soft-delete tombstone. A duplicate losing the dedup is tombstoned rather than removed, so every device converges on the same survivor without coordinating." />
+      <Column key="is_immutable"
+              type="Boolean"
+              description="Standard tenant-table flag; unused by this table today." />
+    </Table>
+    <Table name="ACCOUNT_ACCESS" key="ACCOUNT_ACCESS">
+      <Column key="id"
+              type="String"
+              description="Primary Key, and DERIVED rather than random: '&lt;account_id&gt;__&lt;member_id&gt;'. Two admins granting the same pair while offline therefore mint the SAME row and converge under last-write-wins, instead of leaving two rows for one decision. IMPORT_MAPPINGS refused a derived id because a digest of a low-entropy column header would publish the shape of a family's bank file; nothing is disclosed here, because both halves of this id are already plaintext columns on the row it names." />
+      <Column key="account_id"
+              type="String"
+              description="The account being shared. Plaintext, because the server resolves visibility from it - TRANSACTIONS and STAGED_TRANSACTIONS derive their own visibility through their plaintext account_id, and a server cannot scope what it cannot read. NO foreign key: this table references families(id) alone, so a grant outlives the account it names and the client reconciles orphans out of what it renders." />
+      <Column key="member_id"
+              type="String"
+              description="The member being granted. Plaintext for the same reason as account_id, and with no foreign key for the same reason. Keyed on MEMBER rather than on user: when a person may belong to several families they hold one member row per family, and a grant is only meaningful inside one." />
+      <Column key="granted_by_member_id"
+              type="String"
+              description="The member who granted it. SERVER-DERIVED from the session and write-once; ignored/stripped on writes. A client value here would be a claim about identity. Stripped rather than rejected: a non-writable key makes the seam throw and one refused row takes the whole batch with it, whereas a strip drops silently and the trigger repopulates." />
+      <Column key="deleted"
+              type="Boolean"
+              description="Soft-delete tombstone, and on THIS table it is the revocation mechanism rather than a housekeeping flag. A delta read is `updated_at > since`, so a row that is simply absent is indistinguishable from a row that has not changed - a hard delete would never reach a second admin device. A tombstoned grant confers nothing: the server's visibility predicates filter it." />
       <Column key="is_immutable"
               type="Boolean"
               description="Standard tenant-table flag; unused by this table today." />
