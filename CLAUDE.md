@@ -38,7 +38,9 @@ This is the **server** of BearFunds ("Sweet Savings For Families") — the backe
 
 The **BearFunds brain vault** (separate repo; path per machine in its `CLAUDE Environments.md`) owns the decisions, the maps, and the decision trail. This repo owns the runtime and the canonical Schema Contract. When a "why" is needed, it lives in the brain.
 
-Brain Reference docs (under `Areas/BearFunds/`): `Reference/BearFunds Server Architecture.md` (the design this repo implements), `Reference/BearFunds Schema Contract.md`, `Reference/BearFunds Data Model.md`, `Reference/BearFunds Persistence and Sync.md`; plus `Sources of Truth.md` (governance + the Schema Contract re-home) and `Open Questions.md` (the decision registry). The completed `Migration Playbook.md` is archived at `Archive/BearFunds/`.
+Brain Reference docs (under `Areas/BearFunds/`): `Reference/BearFunds Server Architecture.md` (the design this repo implements), `Reference/BearFunds Schema Contract.md`, `Reference/BearFunds Data Model.md`, `Reference/BearFunds Persistence and Sync.md`; plus `Sources of Truth.md` (governance + the Schema Contract re-home). The completed `Migration Playbook.md` is archived at `Archive/BearFunds/`.
+
+**The decision registry is one file per entry** (2026-08-25): the entries live under `Areas/BearFunds/Questions/` with the index page inside that folder. Cite a question by its prefixed code (`BF-Q6`, never a bare `Q6`), because every area keeps its own register and a bare code no longer says which one is meant.
 
 Initial setup is complete and kept only as history: the canonical contract re-home (2026-06-02) and the Supabase scaffold + deploy (2026-06-17) both went through the standard protocol; details in the brain.
 
