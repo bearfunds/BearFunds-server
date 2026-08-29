@@ -44,7 +44,9 @@ Brain Reference docs (under `Areas/BearFunds/`): `Reference/BearFunds Server Arc
 
 Initial setup is complete and kept only as history: the canonical contract re-home (2026-06-02) and the Supabase scaffold + deploy (2026-06-17) both went through the standard protocol; details in the brain.
 
-**`search-code` is canonical in the plugin; the copy here is a DROP-IN.** The skill lives in `second-brain-skills` and is copied into this repo at `.claude/skills/search-code/` so a session is self-contained whichever machine it runs on. **Never edit the drop-in** - a rule change is written to the canonical copy and every drop-in is refreshed from it. Repo-specific search hazards do NOT belong in the skill: they are filed to `.claude/skill-extensions/search-code.md` in this repo, which the skill reads before searching.
+**A SHARED SKILL IS SERVED BY ITS PLUGIN, NEVER BY A COPY IN THIS REPO. The `.claude/skills/search-code/` drop-in was RETIRED on 2026-08-29.** `search-code` reaches a session through the installed plugin - Claude Code through the marketplace, Cowork through its own per-user store. **A repo-local copy is not a fallback - it is the thing that WINS**, because a project's `.claude/skills/` takes precedence over a plugin-provided skill of the same name, so a stale hand-copy silently shadows the current one and nothing reports it. This repo's copy had gone stale exactly that way: its SKILL.md predated the `blast-radius` extraction and still told a session that renaming and deleting were "edit mechanics" with no skill to escalate to.
+
+**ONE thing in this repo is NOT a drop-in and stays.** `.claude/skill-extensions/search-code.md` carries the search hazards that are only true here, and the shared skill reads it before searching; `.claude/skill-extensions/blast-radius.md` does the same for that skill. That is the pattern for anything repo-specific: an EXTENSION the skill loads, never a copy of the skill.
 
 ## Environment & write-path rules (canonical: brain `CLAUDE.md`, "Tool reliability")
 
