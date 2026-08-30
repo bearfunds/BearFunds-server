@@ -49,3 +49,12 @@ _Moved from the brain's `CLAUDE.md` on 2026-08-31, where they were loading for e
 **A default parameter fires on `undefined` ONLY, and `|| ''` walks straight past it.** A fallback must be LEGAL for every consumer, not merely non-null - `''` is not a currency, `0` is not a date, and an empty string reaching a validator is a 400 that reads as a client bug. Test the value the default defends against, not just the absent case. **A path with no coverage is a path with no witnesses, not a path with no bugs.**
 
 **An assertion must read the source that can observe its subject.** Write through the API seam, read from Postgres; assert RLS by querying AS the role, never by reading the policy text. **Open any test that MANUFACTURES a precondition with a control that fails if the precondition did not take** - a suite that seeds a row and then asserts against a stale connection is asserting about its own setup.
+## E6. A redundant defence at a seam that rejects is not free
+
+_Moved from the brain's `CLAUDE.md` on 2026-08-31. The failure is a wire one and it belongs where the wire is._
+
+**Before hardening a seam, establish which layer actually ENFORCES the property**, then ask what the new layer DOES to input it rejects - drop it, or refuse the request.
+
+**A dropping layer is additive. A refusing layer is a wire-breaking change, and at a BATCH endpoint it takes every sibling row down with it.** The layer that already held is not the one that breaks.
+
+**The tell is a defence added in the same commit as the one that closes the hole**: the second is protecting against a case the first already owns, and it is paying a cost nobody priced.
