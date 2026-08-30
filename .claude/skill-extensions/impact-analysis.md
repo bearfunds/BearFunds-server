@@ -17,7 +17,7 @@ Where the moving parts are. The design this implements is the brain's `BearFunds
 
 ## E2. The execution boundary - what the Test Plan may and may not claim
 
-Proven sandbox-safe here: **Postgres 16 RLS-isolation suites via `pgserver`** (the recipe is in the brain's Tool reliability) and pure-Node action and validation harnesses.
+Proven sandbox-safe here: **Postgres 16 RLS-isolation suites via `pgserver`** (the recipe is E3 below) and pure-Node action and validation harnesses.
 
 **Operator-side: `supabase functions serve` and any live-function E2E, Deno-native test runs - `deno.land` is network-blocked - and anything that builds or drives the client app.** An Impact Analysis that promises a live-function check is promising something this session cannot run; say who runs it.
 
