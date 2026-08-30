@@ -30,3 +30,22 @@ _Moved from the brain's `CLAUDE.md` on 2026-08-31: these are server facts, and t
 **Postgres 16 RLS and SQL suites run in-sandbox via `pgserver`.** `pip install pgserver --break-system-packages`. The server does not persist across bash calls, so it is ONE-SHOT per call: `initdb -D /tmp/pgd -U postgres -A trust`, then `pg_ctl -D /tmp/pgd -o "-k /tmp/pgsock -p 5433 -c listen_addresses=''" -w start`, then apply `auth_shim.sql` plus the migrations plus the suite via `psql -h /tmp/pgsock -p 5433 -U postgres`, then stop. **To reproduce Supabase's grant behaviour, create an `anon` role and `alter default privileges in schema public grant all on tables to anon, authenticated` BEFORE the migrations.**
 
 **A ledger about one database says nothing about another.** `supabase migration list` compares the migration FILES ON DISK against the LINKED REMOTE project, so neither of its columns describes the local stack the app actually talks to. Three consequences: a claim about what a database CONTAINS is settled by querying THAT database, because a migration ledger records intent and intent is not schema; establish WHICH instance a CLI command describes before believing it - `VITE_SUPABASE_URL` for the app, `supabase/.temp/project-ref` for the CLI, and they are routinely different; and a local stack started before a migration was written does not have it, which `supabase migration up` fixes. The tell is a tool answering confidently about "remote" when nothing in the failing path is remote.
+## E4. An FK's delete action is a retention decision
+
+_Moved from the brain's `CLAUDE.md` on 2026-08-31. It is a Postgres rule stated nowhere else, and it was loading in every vault session that never opens this repo._
+
+**A delete action is chosen from the paths that DELETE THE PARENT, never from the shape of the relation.** Before choosing one, grep for every statement that deletes the parent row, and ask what the child is FOR.
+
+**A log is not tenant data.** Its rows are observations that stay true after their subject is gone, so an opaque key behind a bridge table is the shape wherever the answer is "keep the row, drop the link". The tell is a delete action chosen while thinking about the relation rather than about a deletion.
+
+**And this repo has already answered it three times.** `members.user_id`, `invites.created_by` and `invites.redeemed_by` are all `on delete set null` - sever and keep. **Before designing a policy, grep how sibling columns answer the same question**; a convention with three instances is a decision somebody already made, and re-deriving it from first principles is how a fourth answer gets invented.
+
+## E5. TypeScript gates, and the two that reach every consumer
+
+_Moved from the brain's `CLAUDE.md` on 2026-08-31, where they were loading for every session in every corpus. The client extension states them in React terms; these are the server's._
+
+**A cast is a gate you switched off** - it converts a compile error into a runtime crash. Never cast to satisfy a signature you have not read; if you must loosen a type to make code fit, you picked the wrong type. **Treat every existing `as any` as an unreported bug awaiting its first witness.** The inverse enforces: type an action name, a table name or an event as its own CLOSED UNION rather than as `string`, so a new case cannot ship undeclared - which is what the Schema Contract's action list already is.
+
+**A default parameter fires on `undefined` ONLY, and `|| ''` walks straight past it.** A fallback must be LEGAL for every consumer, not merely non-null - `''` is not a currency, `0` is not a date, and an empty string reaching a validator is a 400 that reads as a client bug. Test the value the default defends against, not just the absent case. **A path with no coverage is a path with no witnesses, not a path with no bugs.**
+
+**An assertion must read the source that can observe its subject.** Write through the API seam, read from Postgres; assert RLS by querying AS the role, never by reading the policy text. **Open any test that MANUFACTURES a precondition with a control that fails if the precondition did not take** - a suite that seeds a row and then asserts against a stale connection is asserting about its own setup.
