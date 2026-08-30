@@ -22,3 +22,11 @@ Proven sandbox-safe here: **Postgres 16 RLS-isolation suites via `pgserver`** (t
 **Operator-side: `supabase functions serve` and any live-function E2E, Deno-native test runs - `deno.land` is network-blocked - and anything that builds or drives the client app.** An Impact Analysis that promises a live-function check is promising something this session cannot run; say who runs it.
 
 **And a migration ledger describes the LINKED REMOTE, not the local stack the app talks to.** Before believing any Supabase CLI output about what exists, establish which instance it is describing.
+
+## E3. Running Postgres and reading the right database
+
+_Moved from the brain's `CLAUDE.md` on 2026-08-31: these are server facts, and they were loading in every vault session that never touches this repo._
+
+**Postgres 16 RLS and SQL suites run in-sandbox via `pgserver`.** `pip install pgserver --break-system-packages`. The server does not persist across bash calls, so it is ONE-SHOT per call: `initdb -D /tmp/pgd -U postgres -A trust`, then `pg_ctl -D /tmp/pgd -o "-k /tmp/pgsock -p 5433 -c listen_addresses=''" -w start`, then apply `auth_shim.sql` plus the migrations plus the suite via `psql -h /tmp/pgsock -p 5433 -U postgres`, then stop. **To reproduce Supabase's grant behaviour, create an `anon` role and `alter default privileges in schema public grant all on tables to anon, authenticated` BEFORE the migrations.**
+
+**A ledger about one database says nothing about another.** `supabase migration list` compares the migration FILES ON DISK against the LINKED REMOTE project, so neither of its columns describes the local stack the app actually talks to. Three consequences: a claim about what a database CONTAINS is settled by querying THAT database, because a migration ledger records intent and intent is not schema; establish WHICH instance a CLI command describes before believing it - `VITE_SUPABASE_URL` for the app, `supabase/.temp/project-ref` for the CLI, and they are routinely different; and a local stack started before a migration was written does not have it, which `supabase migration up` fixes. The tell is a tool answering confidently about "remote" when nothing in the failing path is remote.
