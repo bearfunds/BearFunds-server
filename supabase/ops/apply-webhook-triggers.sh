@@ -59,9 +59,15 @@ fi
 TMP_SQL=$(mktemp "/tmp/webhook_triggers.XXXXXX.sql")
 trap 'rm -f "$TMP_SQL"' EXIT
 
-# Literal substitution; \Q...\E protects any regex special chars.
+# Literal substitution. \Q...\E belongs on the PATTERN side, where it protects any
+# regex special chars in the placeholder. On the replacement side it quotemeta'd the
+# VALUE instead, writing "https\:\/\/<ref>\.supabase\.co" into the trigger definition;
+# pg_net then rejected it with 'invalid URL ... Bad scheme' and the failure aborted the
+# whole auth.users insert, i.e. every sign-up died with "Database error saving new user".
+# Interpolating $ENV{...} inserts the value verbatim, so a secret containing special
+# characters survives intact.
 export WEBHOOK_SECRET SUPABASE_URL
-perl -pe 's/<WEBHOOK_SECRET>/\Q$ENV{WEBHOOK_SECRET}\E/g; s/<SUPABASE_URL>/\Q$ENV{SUPABASE_URL}\E/g' "$SQL_TEMPLATE" > "$TMP_SQL"
+perl -pe 's/\Q<WEBHOOK_SECRET>\E/$ENV{WEBHOOK_SECRET}/g; s/\Q<SUPABASE_URL>\E/$ENV{SUPABASE_URL}/g' "$SQL_TEMPLATE" > "$TMP_SQL"
 
 psql "$DB_URL" -f "$TMP_SQL"
 
