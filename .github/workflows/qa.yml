@@ -1,19 +1,16 @@
-# Server CI gate (playbook L6, phase 1).
-# unit:        pure contract logic (action routing + boundary validation), no stack.
-# integration: real local Supabase stack on the runner -- migrations, RLS
-#              isolation suite (virgin db, straight after reset), then the
-#              HTTP E2E harness. No repo secrets: the CLI generates local
-#              keys at runtime and run_e2e.sh reads them without echoing.
-name: CI
+# Server QA CI gate.
+# Runs validation against the local Supabase stack; hosted Supabase deployment is managed separately.
+name: QA CI
 
 on:
   push:
-    branches: [main]
+    branches: [qa]
   pull_request:
-    branches: [main]
+    branches: [qa]
+  workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: qa-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

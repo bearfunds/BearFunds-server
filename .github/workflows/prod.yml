@@ -1,0 +1,58 @@
+# Server production CI gate.
+# Runs validation against the local Supabase stack; hosted Supabase deployment is managed separately.
+name: Production CI
+
+on:
+  push:
+    branches: [prod]
+  pull_request:
+    branches: [prod]
+  workflow_dispatch:
+
+concurrency:
+  group: prod-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Edge Function action/validation suite
+        run: deno test supabase/functions/api/api.test.ts
+
+      - name: parse-receipt handler suite
+        run: deno test supabase/functions/parse-receipt/parse-receipt.test.ts
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start local Supabase stack
+        run: supabase start
+
+      - name: Apply migrations (virgin db)
+        run: supabase db reset
+
+      - name: RLS isolation suite
+        run: bash supabase/tests/run_rls.sh
+
+      - name: google_avatar suite
+        run: bash supabase/tests/run_google_avatar.sh
+
+      - name: E2E harness (live function + DB + RLS over HTTP)
+        run: bash supabase/tests/run_e2e.sh
