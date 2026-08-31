@@ -435,6 +435,58 @@ do $t$ begin
   ), 'v1.17: currency / template_id / stopped_at / period_start / period_end must be DROPPED - a one-off Budget period range in plaintext publishes a family holiday dates to the server';
 end $t$;
 
+-- ============ import_mappings: per-family isolation + opaque enc envelope (v1.22) ============
+-- Entirely opaque: no plaintext columns beyond id/updated_at/deleted/is_immutable - header,
+-- header_norm and verdict all ride enc. Same isolation shape as budgets, minus the plaintext
+-- column checks (there is no plaintext to check).
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+-- Alice creates an import mapping. family_id omitted -> server-derived.
+insert into public.import_mappings (id, enc)
+  values ('im_a1', 'v1.aXY=.Zm9v');
+do $t$ begin
+  assert (select family_id from public.import_mappings where id = 'im_a1') = (select family_id from fam where who = 'A'),
+         'new import mapping must be scoped to Alice family';
+  assert (select count(*) from public.import_mappings) = 1, 'Alice sees exactly her import mapping';
+  assert (select updated_at from public.import_mappings where id = 'im_a1') is not null,
+         'import_mappings_set_updated_at trigger must stamp updated_at (without it, delta sync silently drops every mapping edit)';
+end $t$;
+reset role; reset request.jwt.claims;
+
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert (select count(*) from public.import_mappings) = 0, 'Bob must not see Alice import mapping (read isolation)';
+end $t$;
+update public.import_mappings set enc = 'v1.HACKED.HACKED' where id = 'im_a1';
+do $t$ begin
+  assert not exists (select 1 from public.import_mappings where id = 'im_a1'), 'Alice import mapping stays invisible to Bob';
+end $t$;
+-- A forged family_id must be overwritten to the CALLER's family, not honoured.
+insert into public.import_mappings (id, enc, family_id)
+  values ('im_b_forge', 'v1.aXY=.Zm9v', (select family_id from fam where who = 'A'));
+do $t$ begin
+  assert (select family_id from public.import_mappings where id = 'im_b_forge') = (select family_id from fam where who = 'B'),
+         'forged family_id must be overwritten to Bob family';
+end $t$;
+reset role; reset request.jwt.claims;
+
+do $t$ begin
+  assert (select enc from public.import_mappings where id = 'im_a1') = 'v1.aXY=.Zm9v', 'Alice import mapping must be unchanged by Bob';
+end $t$;
+
+-- Composite PK (family_id, id): both families may hold the SAME mapping id.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+insert into public.import_mappings (id, enc)
+  values ('im001', 'v1.alice.enc');
+reset role; reset request.jwt.claims;
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+insert into public.import_mappings (id, enc)
+  values ('im001', 'v1.bob.enc');
+reset role; reset request.jwt.claims;
+do $t$ begin
+  assert (select count(*) from public.import_mappings where id = 'im001') = 2, 'both families hold an im001 row';
+  assert (select enc from public.import_mappings where id='im001' and family_id=(select family_id from fam where who='A')) = 'v1.alice.enc', 'Alice im001 unchanged by Bob';
+end $t$;
+
 -- ============ family_version(): family-scoped sync high-water mark (v1.13) ============
 -- The `version` action returns max(updated_at) across the caller's tenant tables. The suite
 -- runs in ONE transaction, so now() (and every trigger-set updated_at) is frozen -- which

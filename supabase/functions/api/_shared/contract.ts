@@ -13,6 +13,10 @@
 // shrinks to kind + period_type - the period bounds, the line id and the entire plan move
 // inside the envelope, so the server can no longer read a family's cadence, currency, or a
 // one-off's exact date range. Budget rows are WIPED by migration 0017 (alpha; no user data).
+// v1.22 (additive): IMPORT_MAPPINGS - the family's memory of which source column header maps
+// to which import field. ENTIRELY opaque: no plaintext columns beyond the standard tenancy/
+// sync scaffolding, so its WRITABLE set is GLOBAL_WRITABLE + enc only, same shape as budgets
+// pre-0017 but with nothing left plaintext at all.
 
 // v1.22 (ADDITIVE): IMPORT_MAPPINGS - the family's memory of which source column header maps to
 // which import field. A pure ENC table: the header, its normalised key and the verdict all ride the
@@ -34,8 +38,8 @@
 // and analytics will gate on it; and a date format is not PII. Categories, subcategories and members
 // are plaintext by the same test, so this is the house rule rather than an exception.
 export type LogicalTable =
-  | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "ACCOUNTS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS"
-  | "BUDGETS" | "IMPORT_MAPPINGS" | "FAMILY_SETTINGS";
+  | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "WALLETS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS"
+  | "BUDGETS" | "IMPORT_MAPPINGS";
 
 export const PHYSICAL: Record<LogicalTable, string> = {
   TRANSACTIONS: "transactions",
@@ -142,7 +146,7 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
 };
 
 export const ACTIONS = new Set([
-  "read", "batchCreate", "batchUpdate", "batchUpsert", "wipe", "version",
+  "read", "batchCreate", "batchUpdate", "batchUpsert", "wipe", "version", "deleteAccount",
 ]);
 
 export function isLogicalTable(t: unknown): t is LogicalTable {

@@ -2,12 +2,12 @@
 
 **A routing file, not a manual.** Everything below points; nothing here restates a rule that lives somewhere else.
 
-The **server** of BearFunds - a deployed Supabase backend (Postgres, RLS, Auth, Edge Functions) under `supabase/`, plus `contracts/`. The **client** (React 19 + TypeScript, offline-first) and the **brain vault** (decisions, maps, the trail) are sibling checkouts; their paths are per machine, in the brain's `CLAUDE Environments.md`.
+This is the **server** of BearFunds ("Sweet Savings For Families") — the backend that provides real authentication, multi-family tenancy, and server-side secrets. The **client repo** (React 19 + TS + Vite, offline-first) is the sibling directory `../client/` in this workspace. This repo is **DEPLOYED** (live since 2026-06-17): a Supabase project under `supabase/` (migrations 0001-0016 + RLS policies + the `api` data Edge Function and the `parse-receipt` AI Edge Function) plus `contracts/` (the canonical Schema Contract).
 
 ## Read these first (in order)
 
-1. **`0_AI_INSTRUCTIONS.md`** - the engineering protocol, adapted for server work, and authoritative over this file.
-2. **`contracts/2_SCHEMA_CONTRACT.xml`** - the API and DB contract, and **canonical here**: the producer owns the interface. The file's `Canonical:` header line is the live version. A change is a deliberate versioned bump the operator drops into the client, never a casual edit.
+1. **`0_AI_INSTRUCTIONS.md`** — the engineering protocol. The canonical working discipline (Impact Analysis → Approval Lock → Test-first → Verify), adapted for server work (contract bumps, tenancy, RLS). Read it fully and follow it exactly. It is authoritative over this file if they ever disagree.
+2. **`contracts/2_SCHEMA_CONTRACT.xml`** — the backend API + DB contract (v1.16). **This repo is its canonical home** (the producer owns the interface; decided 2026-06-01). It is a *shared* client↔server interface, so changes are deliberate version bumps that the operator drops into the client — never casual edits. The canonical copy carries a `Canonical: BearFunds-server · vX.Y` header line; the client keeps a downstream drop-in (currently v1.15, one bump behind).
 
 ## Start work with a skill
 

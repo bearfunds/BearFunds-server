@@ -3,7 +3,7 @@
 // server-derived by the DB (trigger + RLS); this function never reads a family_id from
 // the body. Envelope: { status: 'success', data } | { status: 'error', code, message }
 // (v1.15: `code` is a closed enum; raw upstream detail never reaches the wire - Q21).
-import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { CORS, json, requireUser, isAuthed, testScopedClient } from "../_shared/http.ts";
 import { parseRequest } from "./_shared/validation.ts";
 import { classifyApiError, UpstreamDbError } from "./_shared/errors.ts";
@@ -11,7 +11,9 @@ import { DbExecutor, runAction } from "./_shared/actions.ts";
 
 // supabase-js-backed executor. The client carries the caller's JWT, so every query
 // runs under that session's RLS - isolation does not depend on this function's logic.
-function makeExecutor(supabase: SupabaseClient): DbExecutor {
+// userId is the verified caller (from requireUser), needed only by deleteAccount to
+// remove the Auth user - every other action stays entirely on the RLS-bound client.
+function makeExecutor(supabase: SupabaseClient, userId: string): DbExecutor {
   // Preserve the SQLSTATE for classification; the raw message goes to logs only.
   const fail = (e: { message: string; code?: string }) => { throw new UpstreamDbError(e.message, e.code); };
   return {
@@ -43,6 +45,50 @@ function makeExecutor(supabase: SupabaseClient): DbExecutor {
       const { data, error } = await supabase.rpc("family_version");
       if (error) fail(error);
       return { version: (data as string | null) ?? null };
+    },
+    async deleteAccount() {
+      // Read-only: how many account-linked members does the caller's family have?
+      // Stays on the RLS-bound client - auth_family_id() already scopes this to the
+      // caller's own family, so no explicit family_id filter is needed or trusted.
+      const { count, error: countError } = await supabase
+        .from("members")
+        .select("id", { count: "exact", head: true })
+        .not("user_id", "is", null);
+      if (countError) fail(countError);
+
+      // The two destructive steps below need the service-role key: `families` grants
+      // Auth-schema access RLS cannot reach - by design (see 0002_rls_policies.sql).
+      const admin = createClient(
+        Deno.env.get("SUPABASE_URL")!,
+        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+        { auth: { persistSession: false } },
+      );
+
+      // Caller is the last (or only) account-linked member: drop the whole family.
+      // Every tenant table FKs to families(id) on delete cascade, so this one delete
+      // removes transactions/categories/wallets/entities/members/staged_transactions/
+      // budgets/import_mappings for this family - no per-table cleanup needed. Must
+      // happen BEFORE the auth user is deleted, while the caller's session is still live.
+      if ((count ?? 0) <= 1) {
+        const { data: memberRow, error: memberError } = await supabase
+          .from("members")
+          .select("family_id")
+          .limit(1)
+          .maybeSingle();
+        if (memberError) fail(memberError);
+        if (memberRow?.family_id) {
+          const { error: familyError } = await admin.from("families").delete().eq("id", memberRow.family_id);
+          if (familyError) fail(familyError);
+        }
+      }
+      // Not the last member: nothing else to do here. The members.user_id FK (on delete
+      // set null) unlinks the caller's row when their auth user goes, keeping their name
+      // on historic transactions for the rest of the family - same as removing a member.
+
+      const { error: authError } = await admin.auth.admin.deleteUser(userId);
+      if (authError) fail({ message: authError.message, code: authError.code });
+
+      return { deleted: true as const };
     },
     async wipe(table) {
       let q = supabase.from(table).delete({ count: "exact" }).neq("id", "__never_matches__");
@@ -83,7 +129,7 @@ Deno.serve(async (req: Request) => {
       if (provisionError) throw new UpstreamDbError(provisionError.message, (provisionError as { code?: string }).code);
       supabase = testScopedClient(req);
     }
-    const data = await runAction(request, makeExecutor(supabase), { isTest });
+    const data = await runAction(request, makeExecutor(supabase, auth.userId), { isTest });
     return json({ status: "success", data });
   } catch (e) {
     const classified = classifyApiError(e);
