@@ -16,7 +16,7 @@ alter table public.transactions
   drop column if exists description,
   drop column if exists tags;
 
-alter table public.wallets
+alter table public.accounts
   add column if not exists enc text,
   drop column if exists name,
   drop column if exists description;
@@ -32,7 +32,7 @@ alter table public.staged_transactions
   drop column if exists amount,
   drop column if exists description,
   drop column if exists tags,
-  drop column if exists source_wallet,
+  drop column if exists source_account,
   drop column if exists source_category,
   drop column if exists source_name,
   drop column if exists source_row;

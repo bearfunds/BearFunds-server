@@ -38,12 +38,12 @@ do $$ begin
   assert (select count(*) from public.families) = 1, 'Alice must see only her own family';
 end $$;
 
--- Create a wallet with family_id omitted -> server-derived to Alice.
-insert into public.wallets (id, currency, enc) values ('w_a1', 'EUR', 'v1.iv_a1.ct_alice_eur');
+-- Create an account with family_id omitted -> server-derived to Alice.
+insert into public.accounts (id, currency, enc) values ('w_a1', 'EUR', 'v1.iv_a1.ct_alice_eur');
 do $$ begin
-  assert (select family_id from public.wallets where id = 'w_a1') = (select family_id from fam where who = 'A'),
-         'new wallet must be scoped to Alice family';
-  assert (select count(*) from public.wallets) = 1, 'Alice sees exactly her wallet';
+  assert (select family_id from public.accounts where id = 'w_a1') = (select family_id from fam where who = 'A'),
+         'new account must be scoped to Alice family';
+  assert (select count(*) from public.accounts) = 1, 'Alice sees exactly her account';
 end $$;
 
 reset role; reset request.jwt.claims;
@@ -52,22 +52,22 @@ reset role; reset request.jwt.claims;
 set role authenticated;
 set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
 
--- READ isolation: Bob cannot see Alice's wallet.
+-- READ isolation: Bob cannot see Alice's account.
 do $$ begin
-  assert (select count(*) from public.wallets) = 0, 'Bob must not see Alice wallet (read isolation)';
+  assert (select count(*) from public.accounts) = 0, 'Bob must not see Alice account (read isolation)';
 end $$;
 
 -- WRITE isolation: Bob's update of Alice's row hits nothing (row invisible).
-update public.wallets set enc = 'HACKED' where id = 'w_a1';
+update public.accounts set enc = 'HACKED' where id = 'w_a1';
 do $$ begin
-  assert not exists (select 1 from public.wallets where id = 'w_a1'), 'Alice wallet stays invisible to Bob';
+  assert not exists (select 1 from public.accounts where id = 'w_a1'), 'Alice account stays invisible to Bob';
 end $$;
 
 -- FORGERY: Bob inserts with Alice family_id in the body -> trigger forces it to Bob.
-insert into public.wallets (id, currency, family_id)
+insert into public.accounts (id, currency, family_id)
   values ('w_b_forge', 'USD', (select family_id from fam where who = 'A'));
 do $$ begin
-  assert (select family_id from public.wallets where id = 'w_b_forge') = (select family_id from fam where who = 'B'),
+  assert (select family_id from public.accounts where id = 'w_b_forge') = (select family_id from fam where who = 'B'),
          'forged family_id must be overwritten to Bob family';
 end $$;
 
@@ -75,25 +75,25 @@ reset role; reset request.jwt.claims;
 
 -- ============ Superuser: confirm Alice survived Bob entirely ============
 do $$ begin
-  assert (select enc from public.wallets where id = 'w_a1') = 'v1.iv_a1.ct_alice_eur', 'Alice wallet must be unchanged';
-  assert (select count(*) from public.wallets where family_id = (select family_id from fam where who = 'A')) = 1,
-         'Alice family still has exactly one wallet';
-  assert (select count(*) from public.wallets where family_id = (select family_id from fam where who = 'B')) = 1,
-         'Bob family has only the forged-then-corrected wallet';
+  assert (select enc from public.accounts where id = 'w_a1') = 'v1.iv_a1.ct_alice_eur', 'Alice account must be unchanged';
+  assert (select count(*) from public.accounts where family_id = (select family_id from fam where who = 'A')) = 1,
+         'Alice family still has exactly one account';
+  assert (select count(*) from public.accounts where family_id = (select family_id from fam where who = 'B')) = 1,
+         'Bob family has only the forged-then-corrected account';
 end $$;
 
 -- ============ updated_at is server-managed ============
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
-insert into public.wallets (id, currency, updated_at) values ('w_a2', 'EUR', '2000-01-01T00:00:00Z');
+insert into public.accounts (id, currency, updated_at) values ('w_a2', 'EUR', '2000-01-01T00:00:00Z');
 do $$ begin
-  assert (select updated_at from public.wallets where id = 'w_a2') > now() - interval '1 minute',
+  assert (select updated_at from public.accounts where id = 'w_a2') > now() - interval '1 minute',
          'updated_at must be overwritten to server now()';
 end $$;
 
 -- ============ family_id is immutable on update ============
-update public.wallets set family_id = (select family_id from fam where who = 'B') where id = 'w_a2';
+update public.accounts set family_id = (select family_id from fam where who = 'B') where id = 'w_a2';
 do $$ begin
-  assert (select family_id from public.wallets where id = 'w_a2') = (select family_id from fam where who = 'A'),
+  assert (select family_id from public.accounts where id = 'w_a2') = (select family_id from fam where who = 'A'),
          'family_id must not move families on update';
 end $$;
 reset role; reset request.jwt.claims;
@@ -361,14 +361,140 @@ do $t$ begin
   assert (select name from public.categories where id='c001' and family_id=(select family_id from fam where who='B')) = 'Bob Food', 'Bob c001 distinct from Alice';
 end $t$;
 
+-- ============ budgets: per-family isolation + opaque enc envelope (v1.17) ============
+-- RESHAPED BY 0017 (the Budgets/Areas remodel). Every row is now an INSTANCE, and the plaintext
+-- surface is down to kind + period_type: the period bounds, the recurring line id and the WHOLE
+-- plan (target, accounts, Areas, category membership) ride the enc envelope. The isolation
+-- properties below are re-asserted against the new shape - a tenant table that changes shape gets
+-- its own RLS test (server convention; risk map S3).
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+-- Alice creates a monthly Budget. family_id omitted -> server-derived.
+insert into public.budgets (id, period_type, kind, enc)
+  values ('b_a1', 'monthly', 'instance', 'v1.aXY=.Zm9v');
+do $t$ begin
+  assert (select family_id from public.budgets where id = 'b_a1') = (select family_id from fam where who = 'A'),
+         'new budget must be scoped to Alice family';
+  assert (select count(*) from public.budgets) = 1, 'Alice sees exactly her budget';
+  assert (select updated_at from public.budgets where id = 'b_a1') is not null,
+         'budgets_set_updated_at trigger must stamp updated_at (without it, delta sync silently drops every budget edit)';
+end $t$;
+reset role; reset request.jwt.claims;
+
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert (select count(*) from public.budgets) = 0, 'Bob must not see Alice budget (read isolation)';
+end $t$;
+update public.budgets set enc = 'v1.HACKED.HACKED' where id = 'b_a1';
+do $t$ begin
+  assert not exists (select 1 from public.budgets where id = 'b_a1'), 'Alice budget stays invisible to Bob';
+end $t$;
+-- A forged family_id must be overwritten to the CALLER's family, not honoured.
+insert into public.budgets (id, period_type, kind, enc, family_id)
+  values ('b_b_forge', 'monthly', 'instance', 'v1.aXY=.Zm9v', (select family_id from fam where who = 'A'));
+do $t$ begin
+  assert (select family_id from public.budgets where id = 'b_b_forge') = (select family_id from fam where who = 'B'),
+         'forged family_id must be overwritten to Bob family';
+end $t$;
+reset role; reset request.jwt.claims;
+
+do $t$ begin
+  assert (select enc from public.budgets where id = 'b_a1') = 'v1.aXY=.Zm9v', 'Alice budget must be unchanged by Bob';
+end $t$;
+
+-- Composite PK (family_id, id): both families may hold the SAME budget id. Budget ids are random
+-- at v1.17, so a collision is now vanishingly unlikely rather than routine - but B5 will seed
+-- Budgets with fixed ids, and a global id PK would collide -> RLS-denied upsert -> 500 (the 0009
+-- bug). The property is cheap to keep and expensive to rediscover.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+insert into public.budgets (id, period_type, kind, enc)
+  values ('b001', 'monthly', 'instance', 'v1.alice.enc');
+reset role; reset request.jwt.claims;
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+insert into public.budgets (id, period_type, kind, enc)
+  values ('b001', 'monthly', 'instance', 'v1.bob.enc');
+reset role; reset request.jwt.claims;
+do $t$ begin
+  assert (select count(*) from public.budgets where id = 'b001') = 2, 'both families hold a b001 row';
+  assert (select enc from public.budgets where id='b001' and family_id=(select family_id from fam where who='A')) = 'v1.alice.enc', 'Alice b001 unchanged by Bob';
+end $t$;
+
+-- v1.17: the behavioural-metadata columns are GONE from the wire AND from the table.
+-- This is the S1 mitigation, and it is only real if the columns actually do not exist: a
+-- server that still HAS `period_start` can still be made to store it. CONTROL first, so the
+-- assertion below can fail - `enc` is a column that certainly exists.
+do $t$ begin
+  assert exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'budgets' and column_name = 'enc'
+  ), 'CONTROL: budgets.enc exists (so the absence checks below can actually fail)';
+
+  assert not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'budgets'
+      and column_name in ('currency', 'template_id', 'stopped_at', 'period_start', 'period_end')
+  ), 'v1.17: currency / template_id / stopped_at / period_start / period_end must be DROPPED - a one-off Budget period range in plaintext publishes a family holiday dates to the server';
+end $t$;
+
+-- ============ import_mappings: per-family isolation + opaque enc envelope (v1.22) ============
+-- Entirely opaque: no plaintext columns beyond id/updated_at/deleted/is_immutable - header,
+-- header_norm and verdict all ride enc. Same isolation shape as budgets, minus the plaintext
+-- column checks (there is no plaintext to check).
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+-- Alice creates an import mapping. family_id omitted -> server-derived.
+insert into public.import_mappings (id, enc)
+  values ('im_a1', 'v1.aXY=.Zm9v');
+do $t$ begin
+  assert (select family_id from public.import_mappings where id = 'im_a1') = (select family_id from fam where who = 'A'),
+         'new import mapping must be scoped to Alice family';
+  assert (select count(*) from public.import_mappings) = 1, 'Alice sees exactly her import mapping';
+  assert (select updated_at from public.import_mappings where id = 'im_a1') is not null,
+         'import_mappings_set_updated_at trigger must stamp updated_at (without it, delta sync silently drops every mapping edit)';
+end $t$;
+reset role; reset request.jwt.claims;
+
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert (select count(*) from public.import_mappings) = 0, 'Bob must not see Alice import mapping (read isolation)';
+end $t$;
+update public.import_mappings set enc = 'v1.HACKED.HACKED' where id = 'im_a1';
+do $t$ begin
+  assert not exists (select 1 from public.import_mappings where id = 'im_a1'), 'Alice import mapping stays invisible to Bob';
+end $t$;
+-- A forged family_id must be overwritten to the CALLER's family, not honoured.
+insert into public.import_mappings (id, enc, family_id)
+  values ('im_b_forge', 'v1.aXY=.Zm9v', (select family_id from fam where who = 'A'));
+do $t$ begin
+  assert (select family_id from public.import_mappings where id = 'im_b_forge') = (select family_id from fam where who = 'B'),
+         'forged family_id must be overwritten to Bob family';
+end $t$;
+reset role; reset request.jwt.claims;
+
+do $t$ begin
+  assert (select enc from public.import_mappings where id = 'im_a1') = 'v1.aXY=.Zm9v', 'Alice import mapping must be unchanged by Bob';
+end $t$;
+
+-- Composite PK (family_id, id): both families may hold the SAME mapping id.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+insert into public.import_mappings (id, enc)
+  values ('im001', 'v1.alice.enc');
+reset role; reset request.jwt.claims;
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+insert into public.import_mappings (id, enc)
+  values ('im001', 'v1.bob.enc');
+reset role; reset request.jwt.claims;
+do $t$ begin
+  assert (select count(*) from public.import_mappings where id = 'im001') = 2, 'both families hold an im001 row';
+  assert (select enc from public.import_mappings where id='im001' and family_id=(select family_id from fam where who='A')) = 'v1.alice.enc', 'Alice im001 unchanged by Bob';
+end $t$;
+
 -- ============ family_version(): family-scoped sync high-water mark (v1.13) ============
 -- The `version` action returns max(updated_at) across the caller's tenant tables. The suite
 -- runs in ONE transaction, so now() (and every trigger-set updated_at) is frozen -- which
 -- would make Alice's and Bob's versions identical. To prove ISOLATION, forge a single
--- far-future updated_at on Alice's wallet with the updated_at trigger disabled
+-- far-future updated_at on Alice's account with the updated_at trigger disabled
 -- (session_replication_role=replica, superuser), then assert only Alice's version reflects it.
 set session_replication_role = replica;
-update public.wallets set updated_at = '2099-01-01T00:00:00Z' where id = 'w_a1';
+update public.accounts set updated_at = '2099-01-01T00:00:00Z' where id = 'w_a1';
 set session_replication_role = origin;
 
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
@@ -386,6 +512,276 @@ do $t$ begin
          'Bob version does NOT see Alice future row (per-family isolation)';
 end $t$;
 reset role; reset request.jwt.claims;
+
+-- budgets must be REGISTERED in family_version() (v1.16). The silent break this pins:
+-- family_version() is a hardcoded union per tenant table, so omitting budgets returns a
+-- stale high-water mark and a device whose ONLY change is a budget edit is told "nothing
+-- changed" and never syncs -- with no error anywhere.
+-- CONTROL first: before the forge, Bob's version sits BELOW the probe timestamp - so the
+-- assert after it can actually fail (a check that cannot fail is not a check).
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert public.family_version() < '2098-01-01T00:00:00Z'::timestamptz,
+         'CONTROL: Bob version is below the budgets probe timestamp before the forge';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- Forge a far-future updated_at on Bob's budget with the trigger disabled (the suite runs in
+-- one transaction, so now() is frozen and every updated_at would otherwise be identical).
+set session_replication_role = replica;
+update public.budgets set updated_at = '2098-01-01T00:00:00Z' where id = 'b_b_forge';
+set session_replication_role = origin;
+
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert public.family_version() = '2098-01-01T00:00:00Z'::timestamptz,
+         'a budgets row MUST move family_version() (budgets registered in the union)';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- ============ import_mappings: tenancy + registration (v1.22) ============
+-- The family's memory of which source column header maps to which import field. Everything
+-- meaningful rides `enc`; this table has no plaintext columns beyond the scaffolding, so the
+-- asserts below are about ISOLATION and REGISTRATION rather than about any payload.
+
+-- Alice writes one with family_id omitted -> it must be server-derived to her family.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+insert into public.import_mappings (id, enc) values ('im_a1', 'v1.iv_im_a1.ct_alice_date');
+do $t$ begin
+  assert (select family_id from public.import_mappings where id = 'im_a1') = (select family_id from fam where who = 'A'),
+         'a new import mapping must be scoped to the Alice family by the trigger, not by the client';
+  assert (select count(*) from public.import_mappings) = 1, 'Alice sees exactly her own mapping';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- Bob must not see it, must not be able to read it by id, and must not be able to write into
+-- her family by naming it. The third is the one that matters: the first two are SELECT
+-- filtering, and only the WITH CHECK half proves a forged family_id is refused.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert (select count(*) from public.import_mappings) = 0, 'Bob sees NO import mappings of Alice';
+  assert (select count(*) from public.import_mappings where id = 'im_a1') = 0,
+         'and cannot reach hers by naming her id directly';
+end $t$;
+-- A FORGED family_id IS OVERWRITTEN, NOT REFUSED, and the distinction is worth an explicit
+-- assert rather than an exception test. set_family_id() forces every inserted row onto the
+-- CALLER's family and ignores whatever the client sent (0001), so the insert succeeds and
+-- lands harmlessly in Bob's family. A test asserting "denied" would pin a mechanism this
+-- system deliberately does not use, and would go red against correct code - which is exactly
+-- what it did when this block was first written. The property that matters is where the row
+-- ENDS UP, and that is what is asserted here, mirroring the accounts forge earlier in this file.
+insert into public.import_mappings (id, family_id, enc)
+  values ('im_b_forge', (select family_id from fam where who = 'A'), 'v1.iv_im_b.ct_bob_amount');
+do $t$ begin
+  assert (select family_id from public.import_mappings where id = 'im_b_forge') = (select family_id from fam where who = 'B'),
+         'a forged family_id on import_mappings must be overwritten to the Bob family';
+  assert (select count(*) from public.import_mappings) = 1,
+         'and Bob still sees exactly one mapping - his own, never Alice''s';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- And nothing crossed the fence: Alice is untouched by Bob's attempt.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+do $t$ begin
+  assert (select count(*) from public.import_mappings) = 1, 'Alice still has exactly her own mapping';
+  assert (select enc from public.import_mappings where id = 'im_a1') = 'v1.iv_im_a1.ct_alice_date',
+         'and its payload is unchanged';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- import_mappings must be REGISTERED in family_version() (v1.22) - the same silent break
+-- budgets pins above: omit it from the hardcoded union and a device whose ONLY change is a
+-- remembered mapping is told "nothing changed" and never syncs, with no error anywhere.
+-- CONTROL first, so the assert that follows is one that can actually fail.
+-- THE PROBE TIMESTAMP MUST SIT ABOVE EVERY EARLIER FORGE IN THIS FILE, which is why it is
+-- 2100 and not the next number down. Alice's account is forged to 2099 and Bob's budget to
+-- 2098, so a probe at 2097 makes this control assert that Bob is below a time he is already
+-- past - and it goes red against a perfectly correct schema. A forged-future timestamp is a
+-- shared resource in a single-transaction suite, not a local choice.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert public.family_version() < '2100-01-01T00:00:00Z'::timestamptz,
+         'CONTROL: Bob version is below the import_mappings probe timestamp before the forge';
+end $t$;
+reset role; reset request.jwt.claims;
+
+set session_replication_role = replica;
+update public.import_mappings set updated_at = '2100-01-01T00:00:00Z' where id = 'im_b_forge';
+set session_replication_role = origin;
+
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert public.family_version() = '2100-01-01T00:00:00Z'::timestamptz,
+         'an import_mappings row MUST move family_version() (import_mappings registered in the union)';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- And the forge stays on Bob's side of the fence.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+do $t$ begin
+  assert public.family_version() <> '2100-01-01T00:00:00Z'::timestamptz,
+         'Alice version does NOT see Bob import_mappings forge (per-family isolation holds for the new table)';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- ============ family_settings: tenancy + registration + the shared id (v1.24) ============
+-- The family's name, picture, plan and date format. NO enc envelope - nothing here describes the
+-- family's money or its people - so unlike import_mappings the asserts below can read the payload,
+-- and one of them does exactly that to prove a second family cannot.
+--
+-- THE SHARED ID IS THE POINT OF THE COMPOSITE KEY. Every family writes the SAME id here by
+-- construction ('family-settings'), so this table is the sharpest test of migration 0009's
+-- (family_id, id) primary key that exists: under a global `id` PK the second family's insert would
+-- collide into an RLS-denied upsert rather than creating its own row.
+
+-- Alice writes hers with family_id omitted -> it must be server-derived to her family.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+insert into public.family_settings (id, family_name, family_photo, plan_type, date_format)
+  values ('family-settings', 'Alice Family', '/avatars/family/family-01.png', 'Alpha Test', 'dayFirst');
+do $t$ begin
+  assert (select family_id from public.family_settings where family_name = 'Alice Family') = (select family_id from fam where who = 'A'),
+         'a new settings row must be scoped to the Alice family by the trigger, not by the client';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- Bob writes his under the IDENTICAL id. This is the collision 0009 exists to prevent.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+insert into public.family_settings (id, family_name, family_photo, plan_type, date_format)
+  values ('family-settings', 'Bob Family', '/avatars/family/family-02.png', 'Alpha Test', 'monthFirst');
+do $t$ begin
+  assert (select count(*) from public.family_settings) = 1,
+         'Bob sees exactly ONE settings row - his own - though both families share the id';
+  assert (select family_name from public.family_settings) = 'Bob Family',
+         'and it is HIS: a second family reading this table must never see the first family name';
+  assert (select date_format from public.family_settings) = 'monthFirst',
+         'including its date format, which is plaintext and therefore genuinely readable if isolation failed';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- Bob cannot rename Alice's family, by id or otherwise. The write half of isolation.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+update public.family_settings set family_name = 'Hijacked' where family_name = 'Alice Family';
+reset role; reset request.jwt.claims;
+do $t$ begin
+  assert (select count(*) from public.family_settings where family_name = 'Hijacked') = 0,
+         'Bob cannot rename the Alice family - the update matched nothing under RLS';
+  assert (select count(*) from public.family_settings where family_name = 'Alice Family') = 1,
+         'and the Alice row is untouched';
+end $t$;
+
+-- family_settings must be REGISTERED in family_version(). Same silent break as budgets and
+-- import_mappings: omit it and a device whose ONLY change is a renamed family or a switched date
+-- format is told "nothing changed" and never syncs, with no error anywhere.
+-- CONTROL first, so the assert after the forge can actually fail.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert public.family_version() < '2101-01-01T00:00:00Z'::timestamptz,
+         'CONTROL: Bob version is below the family_settings probe timestamp before the forge';
+end $t$;
+reset role; reset request.jwt.claims;
+
+set session_replication_role = replica;
+update public.family_settings set updated_at = '2101-01-01T00:00:00Z' where family_name = 'Bob Family';
+set session_replication_role = origin;
+
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+do $t$ begin
+  assert public.family_version() = '2101-01-01T00:00:00Z'::timestamptz,
+         'a family_settings row MUST move family_version() (family_settings registered in the union)';
+end $t$;
+reset role; reset request.jwt.claims;
+
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+do $t$ begin
+  assert public.family_version() <> '2101-01-01T00:00:00Z'::timestamptz,
+         'Alice version does NOT see Bob family_settings forge (per-family isolation holds for the new table)';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- ============ peek_invite reads the LIVE family name (v1.24) ============
+-- The joiner is not a member and holds no family key, so this is the one disclosure path that must
+-- keep working after the name moves. Two cases, and the FALLBACK is the one that would break
+-- silently: a family with no settings row yet must still introduce itself, not return zero rows and
+-- read to the client as an invalid token.
+-- id defaults to gen_random_uuid() and created_by references auth.users, not members - spelled out
+-- against the real table rather than assumed, because a forged shape here would test nothing.
+insert into public.invites (family_id, token, role, status, expires_at, created_by)
+  select (select family_id from fam where who = 'A'), 'tok_peek_a', 'member', 'pending',
+         now() + interval '7 days', '00000000-0000-0000-0000-00000000000a'::uuid;
+do $t$ begin
+  assert (select family_name from public.peek_invite('tok_peek_a')) = 'Alice Family',
+         'peek_invite returns the LIVE name from family_settings, not the sign-up default';
+end $t$;
+
+-- Now the fallback: drop the settings row and the invite must still name the family.
+delete from public.family_settings where family_name = 'Alice Family';
+do $t$ begin
+  assert (select count(*) from public.peek_invite('tok_peek_a')) = 1,
+         'a family with NO settings row still returns a row - the left join is what stops a missing optional row reading as an invalid token';
+  -- handle_new_user names the family from the Google display name, so Alice's is "Alice's Family" -
+  -- read off the row rather than assumed, because the column DEFAULT is 'My Family' and never used.
+  assert (select family_name from public.peek_invite('tok_peek_a'))
+         = (select name from public.families where id = (select family_id from fam where who = 'A')),
+         'and falls back to the tenancy root name seeded at sign-up';
+end $t$;
+
+-- ============ Role escalation: a member cannot promote themselves ============
+-- THE SUITE HAS ALWAYS BEEN GREEN ABOUT ROLES AND NEVER ASKED THIS QUESTION. Four assertions above
+-- mention `role`, and every one checks a role that was set LEGITIMATELY - Alice is admin, Carol
+-- joined as member. None asked whether a member can BECOME an admin, and until migration 0021 the
+-- answer was yes: `role` sat in the MEMBERS writable allowlist, RLS on that table is family-tenancy
+-- only (no policy anywhere mentions role), and there was no trigger. A member issuing batchUpdate on
+-- their own row with role 'admin' was simply promoted. The invite path has always been admin-gated,
+-- which is the asymmetry that made this a bug rather than a decision.
+--
+-- Carol is a member of family A (she joined via invite i1 above), so she is the right subject.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000c"}';
+do $t$ begin
+  begin
+    update public.members set role = 'admin'
+      where user_id = '00000000-0000-0000-0000-00000000000c';
+    raise exception 'EXPECTED the role-change guard to reject a member promoting themselves';
+  exception when others then
+    if sqlstate = 'P0001' and sqlerrm like 'EXPECTED%' then raise; end if;
+  end;
+  assert (select role from public.members where user_id = '00000000-0000-0000-0000-00000000000c') = 'member',
+         'Carol is still a member after the refused promotion';
+end $t$;
+
+-- CONTROL: the guard discriminates rather than refusing every update. A member editing a NON-role
+-- field on their own row must still succeed - otherwise the assertion above passes for the wrong
+-- reason and the trigger has broken ordinary member edits.
+do $t$ begin
+  update public.members set name = 'Carol Renamed'
+    where user_id = '00000000-0000-0000-0000-00000000000c';
+  assert (select name from public.members where user_id = '00000000-0000-0000-0000-00000000000c') = 'Carol Renamed',
+         'CONTROL: a member may still edit their own non-role fields';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- CONTROL: and an ADMIN may still change a role, so the guard gates on who the caller is rather
+-- than forbidding the column outright. This is the path a future promote/demote UI would use.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+do $t$ begin
+  update public.members set role = 'admin'
+    where user_id = '00000000-0000-0000-0000-00000000000c';
+  assert (select role from public.members where user_id = '00000000-0000-0000-0000-00000000000c') = 'admin',
+         'CONTROL: an admin of the same family MAY change a member role';
+  -- put it back, so anything appended after this sees the fixture it expects
+  update public.members set role = 'member'
+    where user_id = '00000000-0000-0000-0000-00000000000c';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- CONTROL: the INSERT paths are untouched - the guard is BEFORE UPDATE, and both legitimate role
+-- assignments are inserts. Asserted rather than assumed, because a trigger written as BEFORE INSERT
+-- OR UPDATE would break sign-up and join_family and every symptom would be somewhere else.
+do $t$ begin
+  assert (select role from public.members where user_id = '00000000-0000-0000-0000-00000000000a') = 'admin',
+         'the sign-up trigger still seeds a founding admin';
+  assert (select role from public.members where user_id = '00000000-0000-0000-0000-00000000000c') = 'member',
+         'and join_family still seeds an invited member at the invite role';
+end $t$;
 
 rollback;
 \echo '================================'
