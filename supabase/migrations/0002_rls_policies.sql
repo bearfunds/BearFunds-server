@@ -6,7 +6,7 @@
 -- Grants: the `authenticated` role reaches tables only through these policies.
 grant usage on schema public to authenticated;
 grant select, insert, update, delete
-  on public.transactions, public.categories, public.wallets,
+  on public.transactions, public.categories, public.accounts,
      public.entities, public.members
   to authenticated;
 grant select on public.families to authenticated;
@@ -16,7 +16,7 @@ grant execute on function public.auth_family_id() to authenticated;
 alter table public.families      enable row level security;
 alter table public.transactions  enable row level security;
 alter table public.categories    enable row level security;
-alter table public.wallets       enable row level security;
+alter table public.accounts       enable row level security;
 alter table public.entities      enable row level security;
 alter table public.members       enable row level security;
 
@@ -30,7 +30,7 @@ create policy families_self_select on public.families
 do $$
 declare t text;
 begin
-  foreach t in array array['transactions','categories','wallets','entities','members']
+  foreach t in array array['transactions','categories','accounts','entities','members']
   loop
     execute format($f$
       create policy %1$s_family_isolation on public.%1$s

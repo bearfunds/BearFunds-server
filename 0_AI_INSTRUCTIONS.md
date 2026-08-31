@@ -23,7 +23,7 @@ Before writing any code, output a section titled `## Impact Analysis`:
   - If it requires a contract change: STOP and propose it as a **versioned bump** with rationale (do not silently edit the wire shape). Note the client drop-in obligation.
 3. **Tenancy & Auth Check:** Confirm `family_id` is server-derived, that RLS policies cover the touched tables, and that nothing trusts a client-supplied tenant key. Name the behaviour guards: **QA Area 008 (Identity)** and **Area 019 (Isolation)** of the client's `1_QA_MASTERPLAN.xml`.
 4. **Risk:** List other tables/endpoints/policies that might be affected, and any data-loss or migration risk.
-5. **Test Plan:** Count existing tests for the area. State which RLS-isolation and Edge-Function-action tests you will add. If the change would weaken isolation or contradict the Schema Contract, STOP and warn me immediately.
+5. **Test Plan:** Count existing tests for the area and name the command that produced the number; a count with no command beside it is an estimate and says so. State which RLS-isolation and Edge-Function-action tests you will add. If the change would weaken isolation or contradict the Schema Contract, STOP and warn me immediately.
   - **Coverage opportunity:** Name the test(s) this change will add or extend (a bug fix names the regression test that would have caught it; a tenant-table change names the RLS-isolation test). If none is warranted, say why.
 
 ## Step 2: Planning & Approval Lock
@@ -39,7 +39,7 @@ Before writing any code, output a section titled `## Impact Analysis`:
 4. **Cleanup:** Remove any old/commented-out logic (no dead code).
 
 ## Step 4: Verification
-1. **Test Validation:** Output the new test count and confirm isolation tests pass.
+1. **Test Validation:** Output the new test count, the command that produced it, and what it does not cover; confirm isolation tests pass. A bare count, and a green claim with no run named, are both invalid.
 2. **Contract Confirmation:** Confirm the change complies with `2_SCHEMA_CONTRACT.xml` (or names the approved bump).
 3. **Tenancy Confirmation:** Explicitly confirm RLS is enabled on touched tables and `family_id` is server-derived.
 4. **Coverage Ratchet:** State the coverage delta. If this fixed a bug, confirm a regression test was added that fails on the old behaviour and passes now (name it). If it added or changed a feature, contract, or tenancy behaviour, confirm a new or extended test covers it (including an RLS-isolation test for any tenant-table change). If no test was warranted, give the one-line reason.

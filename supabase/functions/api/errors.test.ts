@@ -20,10 +20,10 @@ Deno.test("unique violation (23505) -> CONFLICT 409, no constraint detail", () =
 });
 
 Deno.test("unknown SQLSTATE -> INTERNAL 500 generic", () => {
-  const c = classifyApiError(new UpstreamDbError('deadlock detected on relation "wallets"', "40P01"));
+  const c = classifyApiError(new UpstreamDbError('deadlock detected on relation "accounts"', "40P01"));
   assertEquals(c.code, "INTERNAL");
   assertEquals(c.http, 500);
-  assert(!c.message.includes("wallets") && !c.message.includes("deadlock"));
+  assert(!c.message.includes("accounts") && !c.message.includes("deadlock"));
 });
 
 Deno.test("plain Error (unexpected throw) -> INTERNAL, message NOT passed through", () => {

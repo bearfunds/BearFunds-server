@@ -90,7 +90,7 @@ Deno.test("server E2E — v1.6.0 contract + cross-family isolation", async (t) =
   let aliceFamily = "";
 
   await t.step("unauthenticated request is rejected", async () => {
-    const r = await api(null, { action: "read", table: "WALLETS" });
+    const r = await api(null, { action: "read", table: "ACCOUNTS" });
     // With verify_jwt=true the platform rejects before our function (body may be {msg});
     // with verify_jwt=false our function answers with the {status:"error"} envelope. Accept both.
     assert(r.http === 401 || r.http === 400, `expected 401/400 for a no-token request, got ${r.http}`);
@@ -98,7 +98,7 @@ Deno.test("server E2E — v1.6.0 contract + cross-family isolation", async (t) =
   });
 
   await t.step("A: batchCreate -> success, family_id server-derived", async () => {
-    const r = await api(aliceJwt, { action: "batchCreate", table: "WALLETS", rows: [{ id: wA, enc: "v1.iv_wA.ct_alice_eur", currency: "EUR" }] });
+    const r = await api(aliceJwt, { action: "batchCreate", table: "ACCOUNTS", rows: [{ id: wA, enc: "v1.iv_wA.ct_alice_eur", currency: "EUR" }] });
     assertEquals(r.status, "success");
     const created = rows(r)[0];
     assertEquals(created.id, wA);
@@ -106,57 +106,57 @@ Deno.test("server E2E — v1.6.0 contract + cross-family isolation", async (t) =
     assert(aliceFamily, "created row must carry a server-set family_id");
   });
 
-  await t.step("A: read sees own wallet", async () => {
-    const r = await api(aliceJwt, { action: "read", table: "WALLETS", since: "1970-01-01T00:00:00Z" });
+  await t.step("A: read sees own account", async () => {
+    const r = await api(aliceJwt, { action: "read", table: "ACCOUNTS", since: "1970-01-01T00:00:00Z" });
     assertEquals(r.status, "success");
-    assert(rows(r).some((w) => w.id === wA), "Alice should see her wallet");
+    assert(rows(r).some((w) => w.id === wA), "Alice should see her account");
   });
 
   await t.step("A: batchUpdate then batchUpsert succeed", async () => {
-    const up = await api(aliceJwt, { action: "batchUpdate", table: "WALLETS", updates: [{ id: wA, enc: "v1.iv_wA.ct_v2" }] });
+    const up = await api(aliceJwt, { action: "batchUpdate", table: "ACCOUNTS", updates: [{ id: wA, enc: "v1.iv_wA.ct_v2" }] });
     assertEquals(up.status, "success");
     assertEquals((rows(up)[0] as Record<string, unknown>).enc, "v1.iv_wA.ct_v2");
-    const us = await api(aliceJwt, { action: "batchUpsert", table: "WALLETS", rows: [{ id: wA, enc: "v1.iv_wA.ct_v3", currency: "EUR" }] });
+    const us = await api(aliceJwt, { action: "batchUpsert", table: "ACCOUNTS", rows: [{ id: wA, enc: "v1.iv_wA.ct_v3", currency: "EUR" }] });
     assertEquals(us.status, "success");
     assertEquals((rows(us)[0] as Record<string, unknown>).enc, "v1.iv_wA.ct_v3");
   });
 
-  await t.step("B: cannot READ A's wallet (isolation)", async () => {
-    const r = await api(bobJwt, { action: "read", table: "WALLETS", since: "1970-01-01T00:00:00Z" });
+  await t.step("B: cannot READ A's account (isolation)", async () => {
+    const r = await api(bobJwt, { action: "read", table: "ACCOUNTS", since: "1970-01-01T00:00:00Z" });
     assertEquals(r.status, "success");
-    assert(!rows(r).some((w) => w.id === wA), "Bob must not see Alice's wallet");
+    assert(!rows(r).some((w) => w.id === wA), "Bob must not see Alice's account");
   });
 
-  await t.step("B: UPDATE of A's wallet is a no-op (invisible row)", async () => {
-    const r = await api(bobJwt, { action: "batchUpdate", table: "WALLETS", updates: [{ id: wA, enc: "HACKED" }] });
+  await t.step("B: UPDATE of A's account is a no-op (invisible row)", async () => {
+    const r = await api(bobJwt, { action: "batchUpdate", table: "ACCOUNTS", updates: [{ id: wA, enc: "HACKED" }] });
     assertEquals(r.status, "success");
     assertEquals(rows(r).length, 0, "Bob's cross-family update must affect zero rows");
   });
 
   await t.step("B: forged family_id is overwritten to Bob's family", async () => {
-    const r = await api(bobJwt, { action: "batchCreate", table: "WALLETS", rows: [{ id: wForge, enc: "v1.iv_forge.ct", currency: "USD", family_id: aliceFamily }] });
+    const r = await api(bobJwt, { action: "batchCreate", table: "ACCOUNTS", rows: [{ id: wForge, enc: "v1.iv_forge.ct", currency: "USD", family_id: aliceFamily }] });
     assertEquals(r.status, "success");
     const created = rows(r)[0] as Record<string, unknown>;
     assert(created.family_id !== aliceFamily, "forged family_id must not land in Alice's family");
   });
 
-  await t.step("A: wallet survived Bob untouched", async () => {
-    const r = await api(aliceJwt, { action: "read", table: "WALLETS", since: "1970-01-01T00:00:00Z" });
+  await t.step("A: account survived Bob untouched", async () => {
+    const r = await api(aliceJwt, { action: "read", table: "ACCOUNTS", since: "1970-01-01T00:00:00Z" });
     const mine = rows(r).find((w) => w.id === wA) as Record<string, unknown> | undefined;
-    assertEquals(mine?.enc, "v1.iv_wA.ct_v3", "Alice's wallet enc must be unchanged by Bob");
-    assert(!rows(r).some((w) => w.id === wForge), "Alice must not see Bob's forged wallet");
+    assertEquals(mine?.enc, "v1.iv_wA.ct_v3", "Alice's account enc must be unchanged by Bob");
+    assert(!rows(r).some((w) => w.id === wForge), "Alice must not see Bob's forged account");
   });
 
   await t.step("strict validation: unknown key is rejected over HTTP", async () => {
-    const r = await api(aliceJwt, { action: "batchCreate", table: "WALLETS", rows: [{ id: `x_${RUN}`, bogus: 1 }] });
+    const r = await api(aliceJwt, { action: "batchCreate", table: "ACCOUNTS", rows: [{ id: `x_${RUN}`, bogus: 1 }] });
     assertEquals(r.status, "error");
   });
 
   await t.step("wipe (isTest) clears only the caller's family", async () => {
-    const r = await api(bobJwt, { action: "wipe", table: "WALLETS", isTest: true });
+    const r = await api(bobJwt, { action: "wipe", table: "ACCOUNTS", isTest: true });
     assertEquals(r.status, "success");
-    const a = await api(aliceJwt, { action: "read", table: "WALLETS", since: "1970-01-01T00:00:00Z" });
-    assert(rows(a).some((w) => w.id === wA), "Bob's wipe must not clear Alice's wallet");
+    const a = await api(aliceJwt, { action: "read", table: "ACCOUNTS", since: "1970-01-01T00:00:00Z" });
+    assert(rows(a).some((w) => w.id === wA), "Bob's wipe must not clear Alice's account");
   });
 
   await t.step("linking member's sign-up photo lands in google_avatar, not avatar (0010)", async () => {

@@ -39,12 +39,12 @@ do $$ begin
          'header routes auth_family_id() to Alice test family';
 end $$;
 
-insert into public.wallets (id, currency, enc) values ('w_tf_test', 'EUR', 'v1.iv_tf_t.ct_alice_test');
+insert into public.accounts (id, currency, enc) values ('w_tf_test', 'EUR', 'v1.iv_tf_t.ct_alice_test');
 do $$ begin
-  assert (select family_id from public.wallets where id = 'w_tf_test')
+  assert (select family_id from public.accounts where id = 'w_tf_test')
            = (select family_id from public.user_test_family where user_id = '00000000-0000-0000-0000-0000000000a1'),
          'test-context write is scoped to the test family';
-  assert (select count(*) from public.wallets) = 1, 'in test context Alice sees only the test wallet';
+  assert (select count(*) from public.accounts) = 1, 'in test context Alice sees only the test account';
 end $$;
 
 -- ============ Invariant: drop the header => REAL family, byte-identical behaviour ============
@@ -53,21 +53,21 @@ do $$ begin
   assert not public.is_test_request(), 'no header => is_test_request() false';
   assert public.auth_family_id() = (select family_id from rfam where who = 'A'),
          'no header => auth_family_id() is the real family (invariant)';
-  assert (select count(*) from public.wallets) = 0, 'real family does not contain the test wallet';
+  assert (select count(*) from public.accounts) = 0, 'real family does not contain the test account';
 end $$;
 
-insert into public.wallets (id, currency, enc) values ('w_tf_real', 'EUR', 'v1.iv_tf_r.ct_alice_real');
+insert into public.accounts (id, currency, enc) values ('w_tf_real', 'EUR', 'v1.iv_tf_r.ct_alice_real');
 do $$ begin
-  assert (select family_id from public.wallets where id = 'w_tf_real') = (select family_id from rfam where who = 'A'),
+  assert (select family_id from public.accounts where id = 'w_tf_real') = (select family_id from rfam where who = 'A'),
          'real-context write goes to the real family';
 end $$;
 
--- Back to test context: the real wallet is invisible, the test wallet is visible.
+-- Back to test context: the real account is invisible, the test account is visible.
 set request.headers = '{"x-bf-test":"1"}';
 do $$ begin
-  assert (select count(*) from public.wallets) = 1, 'test context sees exactly the test wallet';
-  assert exists (select 1 from public.wallets where id = 'w_tf_test'), 'test wallet visible in test context';
-  assert not exists (select 1 from public.wallets where id = 'w_tf_real'), 'real wallet invisible in test context';
+  assert (select count(*) from public.accounts) = 1, 'test context sees exactly the test account';
+  assert exists (select 1 from public.accounts where id = 'w_tf_test'), 'test account visible in test context';
+  assert not exists (select 1 from public.accounts where id = 'w_tf_real'), 'real account invisible in test context';
 end $$;
 set request.headers = ''; reset role; reset request.jwt.claims;
 
@@ -88,7 +88,7 @@ do $$ begin
          'Bob is routed to his OWN test family';
   assert public.auth_family_id() <> (select family_id from atf),
          'Bob test family != Alice test family';
-  assert (select count(*) from public.wallets) = 0, 'Bob test family cannot see Alice test wallet (cross-tenant isolation)';
+  assert (select count(*) from public.accounts) = 0, 'Bob test family cannot see Alice test account (cross-tenant isolation)';
 end $$;
 set request.headers = ''; reset role; reset request.jwt.claims;
 
@@ -107,13 +107,13 @@ reset role; reset request.jwt.claims;
 -- Mimics the executor's RLS-scoped delete (the real `wipe` runs the same delete under RLS).
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-0000000000a1"}';
 set request.headers = '{"x-bf-test":"1"}';
-delete from public.wallets where id <> '__never_matches__';
+delete from public.accounts where id <> '__never_matches__';
 do $$ begin
-  assert not exists (select 1 from public.wallets where id = 'w_tf_test'), 'test-context wipe cleared the test wallet';
+  assert not exists (select 1 from public.accounts where id = 'w_tf_test'), 'test-context wipe cleared the test account';
 end $$;
 set request.headers = '';
 do $$ begin
-  assert exists (select 1 from public.wallets where id = 'w_tf_real'), 'the real wallet survived the test-context wipe';
+  assert exists (select 1 from public.accounts where id = 'w_tf_real'), 'the real account survived the test-context wipe';
 end $$;
 reset role; reset request.jwt.claims;
 
