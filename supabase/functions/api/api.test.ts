@@ -79,7 +79,7 @@ Deno.test("RLE: plaintext sensitive keys are rejected per table", () => {
 });
 
 Deno.test("RLE: enc is writable only on envelope tables", () => {
-  for (const table of ["TRANSACTIONS", "WALLETS", "ENTITIES", "STAGED_TRANSACTIONS", "BUDGETS", "IMPORT_MAPPINGS"]) {
+  for (const table of ["TRANSACTIONS", "ACCOUNTS", "ENTITIES", "STAGED_TRANSACTIONS", "BUDGETS", "IMPORT_MAPPINGS"]) {
     const req = parseRequest({ action: "batchUpsert", table, rows: [{ id: "x1", enc: "v1.i.c" }] });
     if (req.action !== "batchUpsert") throw new Error("wrong action");
     assertEquals(req.rows[0], { id: "x1", enc: "v1.i.c" });
