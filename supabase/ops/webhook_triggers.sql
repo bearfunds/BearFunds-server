@@ -13,8 +13,8 @@
 --     triggers with the new token). The function secret must be rotated first:
 --       supabase secrets set WEBHOOK_SECRET=<new-value>
 --
--- Before PART 2, replace BOTH occurrences of <WEBHOOK_SECRET> with the live
--- value. Never commit the file with a real secret in it.
+-- The deployment wrapper replaces <WEBHOOK_SECRET> and <SUPABASE_URL> in a
+-- temporary file. Never commit the file with real values in it.
 --
 -- Verify after running (delivery log):
 --   select status_code, left(content, 200) from net._http_response order by id desc limit 5;
@@ -113,7 +113,7 @@ create trigger feedback
 after insert on public.feedback
 for each row
 execute function supabase_functions.http_request(
-  'https://vxoecghldcaydyqzuqus.supabase.co/functions/v1/send-feedback-notification',
+  '<SUPABASE_URL>/functions/v1/send-feedback-notification',
   'POST',
   '{"Content-type":"application/json","Authorization":"Bearer <WEBHOOK_SECRET>"}',
   '{}',
@@ -126,7 +126,7 @@ create trigger send_welcome_email
 after insert on auth.users
 for each row
 execute function supabase_functions.http_request(
-  'https://vxoecghldcaydyqzuqus.supabase.co/functions/v1/send-welcome-email',
+  '<SUPABASE_URL>/functions/v1/send-welcome-email',
   'POST',
   '{"Content-type":"application/json","Authorization":"Bearer <WEBHOOK_SECRET>"}',
   '{}',
