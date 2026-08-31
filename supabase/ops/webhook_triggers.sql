@@ -19,6 +19,18 @@
 -- Verify after running (delivery log):
 --   select status_code, left(content, 200) from net._http_response order by id desc limit 5;
 --   select tgname, pg_get_triggerdef(oid) from pg_trigger where not tgisinternal;
+--
+-- Verify the URL substitution survived (2026-08-31: the wrapper's perl used \Q...\E on
+-- the replacement side, writing an escaped "https\:\/\/..." into the trigger; pg_net
+-- rejected it and every sign-up failed with "Database error saving new user"). The
+-- triggerdef above must show a clean URL - no backslashes. Then probe the real path,
+-- which exercises BOTH auth.users triggers and keeps nothing:
+--   begin;
+--   insert into auth.users (id, instance_id, aud, role, email, raw_user_meta_data, created_at, updated_at)
+--   values (gen_random_uuid(), '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+--           'probe-' || gen_random_uuid() || '@example.com',
+--           '{"full_name":"Probe User"}'::jsonb, now(), now());
+--   rollback;
 
 -- ===========================================================================
 -- PART 1: supabase_functions schema bootstrap (one-time per environment).
