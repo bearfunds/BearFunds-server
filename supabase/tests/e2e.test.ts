@@ -244,14 +244,14 @@ Deno.test("deleteAccount — rejected in test context; removes the auth user + f
   const carolJwt = await mintJwt(carolId);
 
   await t.step("tenancy exists before deletion", async () => {
-    const r = await api(carolJwt, { action: "batchCreate", table: "WALLETS", rows: [{ id: `w_carol_${RUN}`, enc: "v1.iv.ct", currency: "EUR" }] });
+    const r = await api(carolJwt, { action: "batchCreate", table: "ACCOUNTS", rows: [{ id: `w_carol_${RUN}`, enc: "v1.iv.ct", currency: "EUR" }] });
     assertEquals(r.status, "success");
   });
 
   await t.step("isTest:true is rejected; nothing is deleted", async () => {
     const r = await api(carolJwt, { action: "deleteAccount", isTest: true });
     assertEquals(r.status, "error");
-    const still = await api(carolJwt, { action: "read", table: "WALLETS", since: "1970-01-01T00:00:00Z" });
+    const still = await api(carolJwt, { action: "read", table: "ACCOUNTS", since: "1970-01-01T00:00:00Z" });
     assertEquals(still.status, "success", "Carol must still authenticate after a rejected deleteAccount");
   });
 
@@ -269,7 +269,7 @@ Deno.test("deleteAccount — rejected in test context; removes the auth user + f
   });
 
   await t.step("the old JWT no longer authenticates", async () => {
-    const r = await api(carolJwt, { action: "read", table: "WALLETS", since: "1970-01-01T00:00:00Z" });
+    const r = await api(carolJwt, { action: "read", table: "ACCOUNTS", since: "1970-01-01T00:00:00Z" });
     assert(r.http === 401, `expected 401 for a deleted user's JWT, got ${r.http}`);
   });
 });
