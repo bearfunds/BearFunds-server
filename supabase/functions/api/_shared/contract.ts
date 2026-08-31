@@ -38,8 +38,8 @@
 // and analytics will gate on it; and a date format is not PII. Categories, subcategories and members
 // are plaintext by the same test, so this is the house rule rather than an exception.
 export type LogicalTable =
-  | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "WALLETS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS"
-  | "BUDGETS" | "IMPORT_MAPPINGS";
+  | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "ACCOUNTS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS"
+  | "BUDGETS" | "IMPORT_MAPPINGS" | "FAMILY_SETTINGS";
 
 export const PHYSICAL: Record<LogicalTable, string> = {
   TRANSACTIONS: "transactions",
