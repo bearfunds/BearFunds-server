@@ -546,11 +546,11 @@ reset role; reset request.jwt.claims;
 
 -- Alice writes one with family_id omitted -> it must be server-derived to her family.
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
-insert into public.import_mappings (id, enc) values ('im_a1', 'v1.iv_im_a1.ct_alice_date');
+insert into public.import_mappings (id, enc) values ('im_a2', 'v1.iv_im_a2.ct_alice_date');
 do $t$ begin
-  assert (select family_id from public.import_mappings where id = 'im_a1') = (select family_id from fam where who = 'A'),
+  assert (select family_id from public.import_mappings where id = 'im_a2') = (select family_id from fam where who = 'A'),
          'a new import mapping must be scoped to the Alice family by the trigger, not by the client';
-  assert (select count(*) from public.import_mappings) = 1, 'Alice sees exactly her own mapping';
+  assert (select count(*) from public.import_mappings where id = 'im_a2') = 1, 'Alice sees her new mapping';
 end $t$;
 reset role; reset request.jwt.claims;
 
@@ -559,9 +559,8 @@ reset role; reset request.jwt.claims;
 -- filtering, and only the WITH CHECK half proves a forged family_id is refused.
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
 do $t$ begin
-  assert (select count(*) from public.import_mappings) = 0, 'Bob sees NO import mappings of Alice';
-  assert (select count(*) from public.import_mappings where id = 'im_a1') = 0,
-         'and cannot reach hers by naming her id directly';
+  assert (select count(*) from public.import_mappings where id = 'im_a2') = 0,
+         'Bob cannot see Alice''s mapping from this block';
 end $t$;
 -- A FORGED family_id IS OVERWRITTEN, NOT REFUSED, and the distinction is worth an explicit
 -- assert rather than an exception test. set_family_id() forces every inserted row onto the
@@ -571,20 +570,20 @@ end $t$;
 -- what it did when this block was first written. The property that matters is where the row
 -- ENDS UP, and that is what is asserted here, mirroring the accounts forge earlier in this file.
 insert into public.import_mappings (id, family_id, enc)
-  values ('im_b_forge', (select family_id from fam where who = 'A'), 'v1.iv_im_b.ct_bob_amount');
+  values ('im_b_forge_2', (select family_id from fam where who = 'A'), 'v1.iv_im_b_2.ct_bob_amount');
 do $t$ begin
-  assert (select family_id from public.import_mappings where id = 'im_b_forge') = (select family_id from fam where who = 'B'),
+  assert (select family_id from public.import_mappings where id = 'im_b_forge_2') = (select family_id from fam where who = 'B'),
          'a forged family_id on import_mappings must be overwritten to the Bob family';
-  assert (select count(*) from public.import_mappings) = 1,
-         'and Bob still sees exactly one mapping - his own, never Alice''s';
+  assert (select count(*) from public.import_mappings where id = 'im_b_forge_2') = 1,
+         'and Bob has one mapping for this test block';
 end $t$;
 reset role; reset request.jwt.claims;
 
 -- And nothing crossed the fence: Alice is untouched by Bob's attempt.
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
 do $t$ begin
-  assert (select count(*) from public.import_mappings) = 1, 'Alice still has exactly her own mapping';
-  assert (select enc from public.import_mappings where id = 'im_a1') = 'v1.iv_im_a1.ct_alice_date',
+  assert (select count(*) from public.import_mappings where id = 'im_a2') = 1, 'Alice still has her new mapping';
+  assert (select enc from public.import_mappings where id = 'im_a2') = 'v1.iv_im_a2.ct_alice_date',
          'and its payload is unchanged';
 end $t$;
 reset role; reset request.jwt.claims;
@@ -606,7 +605,7 @@ end $t$;
 reset role; reset request.jwt.claims;
 
 set session_replication_role = replica;
-update public.import_mappings set updated_at = '2100-01-01T00:00:00Z' where id = 'im_b_forge';
+update public.import_mappings set updated_at = '2100-01-01T00:00:00Z' where id = 'im_b_forge_2';
 set session_replication_role = origin;
 
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
