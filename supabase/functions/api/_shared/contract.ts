@@ -13,6 +13,10 @@
 // shrinks to kind + period_type - the period bounds, the line id and the entire plan move
 // inside the envelope, so the server can no longer read a family's cadence, currency, or a
 // one-off's exact date range. Budget rows are WIPED by migration 0017 (alpha; no user data).
+// v1.22 (additive): IMPORT_MAPPINGS - the family's memory of which source column header maps
+// to which import field. ENTIRELY opaque: no plaintext columns beyond the standard tenancy/
+// sync scaffolding, so its WRITABLE set is GLOBAL_WRITABLE + enc only, same shape as budgets
+// pre-0017 but with nothing left plaintext at all.
 
 // v1.22 (ADDITIVE): IMPORT_MAPPINGS - the family's memory of which source column header maps to
 // which import field. A pure ENC table: the header, its normalised key and the verdict all ride the
@@ -241,7 +245,7 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
 };
 
 export const ACTIONS = new Set([
-  "read", "batchCreate", "batchUpdate", "batchUpsert", "wipe", "version",
+  "read", "batchCreate", "batchUpdate", "batchUpsert", "wipe", "version", "deleteAccount",
 ]);
 
 export function isLogicalTable(t: unknown): t is LogicalTable {

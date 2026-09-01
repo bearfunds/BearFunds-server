@@ -15,6 +15,7 @@ function fakeDb() {
     upsert: (t, rows) => { calls.push({ op: "upsert", table: t, arg: rows }); return Promise.resolve(rows); },
     wipe: (t) => { calls.push({ op: "wipe", table: t, arg: null }); return Promise.resolve(3); },
     version: () => { calls.push({ op: "version", table: "", arg: null }); return Promise.resolve({ version: "2026-01-01T00:00:00.000Z" }); },
+    deleteAccount: () => { calls.push({ op: "deleteAccount", table: "", arg: null }); return Promise.resolve({ deleted: true }); },
   };
   return { db, calls };
 }
@@ -71,6 +72,11 @@ Deno.test("RLE: plaintext sensitive keys are rejected per table", () => {
     ["BUDGETS", { id: "b1", period_start: "2026-07-01" }],
     ["BUDGETS", { id: "b1", period_end: "2026-07-31" }],
     ["BUDGETS", { id: "b1", stopped_at: "2026-07-01" }],
+    // IMPORT_MAPPINGS (v1.22): entirely opaque - header/header_norm/verdict all ride enc,
+    // nothing plaintext beyond the global set.
+    ["IMPORT_MAPPINGS", { id: "im1", header: "Date" }],
+    ["IMPORT_MAPPINGS", { id: "im1", header_norm: "date" }],
+    ["IMPORT_MAPPINGS", { id: "im1", verdict: "date" }],
   ];
   for (const [table, row] of cases) {
     assertThrows(
@@ -82,7 +88,7 @@ Deno.test("RLE: plaintext sensitive keys are rejected per table", () => {
 });
 
 Deno.test("RLE: enc is writable only on envelope tables", () => {
-  for (const table of ["TRANSACTIONS", "ACCOUNTS", "ENTITIES", "STAGED_TRANSACTIONS", "BUDGETS"]) {
+  for (const table of ["TRANSACTIONS", "WALLETS", "ENTITIES", "STAGED_TRANSACTIONS", "BUDGETS", "IMPORT_MAPPINGS"]) {
     const req = parseRequest({ action: "batchUpsert", table, rows: [{ id: "x1", enc: "v1.i.c" }] });
     if (req.action !== "batchUpsert") throw new Error("wrong action");
     assertEquals(req.rows[0], { id: "x1", enc: "v1.i.c" });
@@ -290,6 +296,25 @@ Deno.test("STAGED_TRANSACTIONS: rejects unknown row key and read maps logical->p
   assertEquals(calls[0].table, "staged_transactions");
 });
 
+Deno.test("IMPORT_MAPPINGS: strips server keys, keeps writable (id, enc only)", () => {
+  const req = parseRequest({
+    action: "batchUpsert", table: "IMPORT_MAPPINGS",
+    rows: [{ id: "im1", enc: "v1.iv.ct", family_id: "forged", user_id: "x", updated_at: "2000", isDirty: true }],
+  });
+  if (req.action !== "batchUpsert") throw new Error("wrong action");
+  assertEquals(req.rows[0], { id: "im1", enc: "v1.iv.ct" });
+});
+
+Deno.test("IMPORT_MAPPINGS: rejects unknown row key and read maps logical->physical", async () => {
+  assertThrows(
+    () => parseRequest({ action: "batchCreate", table: "IMPORT_MAPPINGS", rows: [{ id: "im1", bogus: 1 }] }),
+    ValidationError, "Unknown key 'bogus'",
+  );
+  const { db, calls } = fakeDb();
+  await runAction(parseRequest({ action: "read", table: "IMPORT_MAPPINGS" }), db, { isTest: false });
+  assertEquals(calls[0].table, "import_mappings");
+});
+
 Deno.test("version: table-less action routes to db.version()", async () => {
   const { db, calls } = fakeDb();
   const out = await runAction(parseRequest({ action: "version" }), db, { isTest: false });
@@ -302,4 +327,30 @@ Deno.test("version: parses with no table; a stray table is ignored", () => {
   assert(a.action === "version");
   const b = parseRequest({ action: "version", table: "TRANSACTIONS" });
   assert(b.action === "version");
+});
+
+Deno.test("deleteAccount: table-less action routes to db.deleteAccount()", async () => {
+  const { db, calls } = fakeDb();
+  const out = await runAction(parseRequest({ action: "deleteAccount" }), db, { isTest: false });
+  assertEquals(calls[0].op, "deleteAccount");
+  assertEquals(out, { deleted: true });
+});
+
+Deno.test("deleteAccount: parses with no table; a stray table is ignored", () => {
+  const a = parseRequest({ action: "deleteAccount" });
+  assert(a.action === "deleteAccount");
+  const b = parseRequest({ action: "deleteAccount", table: "TRANSACTIONS" });
+  assert(b.action === "deleteAccount");
+});
+
+// Irreversible action: must never fire against the shared dev/CI test user. Inverse of
+// wipe's gate (wipe requires isTest=true; deleteAccount requires isTest=false).
+Deno.test("deleteAccount: blocked inside test context, allowed outside", async () => {
+  const { db } = fakeDb();
+  let threw = false;
+  try { await runAction(parseRequest({ action: "deleteAccount" }), db, { isTest: true }); }
+  catch (e) { threw = e instanceof ValidationError; }
+  assert(threw, "deleteAccount must throw when isTest=true");
+  const res = await runAction(parseRequest({ action: "deleteAccount" }), db, { isTest: false });
+  assertEquals(res, { deleted: true });
 });

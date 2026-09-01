@@ -230,3 +230,46 @@ Deno.test("server E2E — v1.6.0 contract + cross-family isolation", async (t) =
     assertEquals(left?.deleted, true, "the staged row is soft-deleted after promotion");
   });
 });
+
+// Isolated from the Alice/Bob suite above: this test's whole point is deleting an auth user,
+// so it needs its own throwaway account rather than risking Alice/Bob mid-sequence.
+//
+// The non-last-member unlink path (members.user_id set null, family untouched) is NOT
+// exercised here: creating a second account-linked member in the same family means going
+// through the invite/join RPC flow, which is out of scope for this action-endpoint suite
+// (invites are control-plane, never on the `api` action endpoint). That path is covered
+// structurally by the existing `on delete set null` FK (0001) and is a manual/ghost-suite check.
+Deno.test("deleteAccount — rejected in test context; removes the auth user + family for a solo member", async (t) => {
+  const carolId = await createUser(`carol+${RUN}@bearfunds.test`, "Carol");
+  const carolJwt = await mintJwt(carolId);
+
+  await t.step("tenancy exists before deletion", async () => {
+    const r = await api(carolJwt, { action: "batchCreate", table: "WALLETS", rows: [{ id: `w_carol_${RUN}`, enc: "v1.iv.ct", currency: "EUR" }] });
+    assertEquals(r.status, "success");
+  });
+
+  await t.step("isTest:true is rejected; nothing is deleted", async () => {
+    const r = await api(carolJwt, { action: "deleteAccount", isTest: true });
+    assertEquals(r.status, "error");
+    const still = await api(carolJwt, { action: "read", table: "WALLETS", since: "1970-01-01T00:00:00Z" });
+    assertEquals(still.status, "success", "Carol must still authenticate after a rejected deleteAccount");
+  });
+
+  await t.step("deleteAccount succeeds for the last (solo) member", async () => {
+    const r = await api(carolJwt, { action: "deleteAccount" });
+    assertEquals(r.status, "success");
+    assertEquals(r.data, { deleted: true });
+  });
+
+  await t.step("the auth user is actually gone", async () => {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${carolId}`, {
+      headers: { apikey: SERVICE_ROLE_KEY, Authorization: `Bearer ${SERVICE_ROLE_KEY}` },
+    });
+    assertEquals(res.status, 404, "a deleted auth user must not be resolvable anymore");
+  });
+
+  await t.step("the old JWT no longer authenticates", async () => {
+    const r = await api(carolJwt, { action: "read", table: "WALLETS", since: "1970-01-01T00:00:00Z" });
+    assert(r.http === 401, `expected 401 for a deleted user's JWT, got ${r.http}`);
+  });
+});
