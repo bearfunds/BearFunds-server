@@ -51,10 +51,7 @@ Deno.test("RLE: plaintext sensitive keys are rejected per table", () => {
     ["BUDGETS", { id: "b1", amount: 400 }],
     ["BUDGETS", { id: "b1", target: 2000 }],
     ["BUDGETS", { id: "b1", note: "new coffee machine" }],
-    ["BUDGETS", { id: "b1", category_ids: "[\"c1\"]" }],
-    ["BUDGETS", { id: "b1", account_ids: "[\"w1\"]" }],
     ["BUDGETS", { id: "b1", areas: "[]" }],
-    ["BUDGETS", { id: "b1", line_id: "line_1" }],
     // The v1 plaintext columns. These are the keys a STALE DEPLOYED CLIENT would send, and the
     // rejection is exactly what makes that failure loud instead of silent - which is why the
     // server and client ship in one coordinated deploy.
@@ -260,4 +257,47 @@ Deno.test("deleteAccount: blocked inside test context, allowed outside", async (
   assert(threw, "deleteAccount must throw when isTest=true");
   const res = await runAction(parseRequest({ action: "deleteAccount" }), db, { isTest: false });
   assertEquals(res, { deleted: true });
+});
+
+Deno.test("v1.25-v1.28: accepts promoted budget fields and account access while stripping server keys", async () => {
+  const budget = parseRequest({
+    action: "batchUpsert", table: "BUDGETS",
+    rows: [{
+      id: "b1", kind: "instance", period_type: "monthly", enc: "v1.i.c",
+      line_id: "line1", account_ids: ["a1"], ignored_category_ids: [], category_ids: ["c1"],
+    }],
+  });
+  if (budget.action !== "batchUpsert") throw new Error("wrong budget action");
+  assertEquals(budget.rows[0], {
+    id: "b1", kind: "instance", period_type: "monthly", enc: "v1.i.c",
+    line_id: "line1", account_ids: ["a1"], ignored_category_ids: [], category_ids: ["c1"],
+  });
+
+  const member = parseRequest({
+    action: "batchUpsert", table: "MEMBERS",
+    rows: [{ id: "m1", name: "Member", scope_version: 3, family_id: "forged" }],
+  });
+  if (member.action !== "batchUpsert") throw new Error("wrong member action");
+  assertEquals(member.rows[0], { id: "m1", name: "Member" });
+
+  const settings = parseRequest({
+    action: "batchUpsert", table: "FAMILY_SETTINGS",
+    rows: [{ id: "family-settings", family_name: "Family", plan_type: "forged" }],
+  });
+  if (settings.action !== "batchUpsert") throw new Error("wrong settings action");
+  assertEquals(settings.rows[0], { id: "family-settings", family_name: "Family" });
+
+  const access = parseRequest({
+    action: "batchUpsert", table: "ACCOUNT_ACCESS",
+    rows: [{
+      id: "a1__m1", account_id: "a1", member_id: "m1", deleted: false,
+      family_id: "forged", granted_by_member_id: "forged", granted_at: "forged",
+    }],
+  });
+  if (access.action !== "batchUpsert") throw new Error("wrong access action");
+  assertEquals(access.rows[0], { id: "a1__m1", account_id: "a1", member_id: "m1", deleted: false });
+
+  const { db, calls } = fakeDb();
+  await runAction(parseRequest({ action: "read", table: "ACCOUNT_ACCESS" }), db, { isTest: false });
+  assertEquals(calls[0].table, "account_access");
 });

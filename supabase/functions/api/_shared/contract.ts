@@ -39,7 +39,7 @@
 // are plaintext by the same test, so this is the house rule rather than an exception.
 export type LogicalTable =
   | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "ACCOUNTS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS"
-  | "BUDGETS" | "IMPORT_MAPPINGS" | "FAMILY_SETTINGS";
+  | "BUDGETS" | "IMPORT_MAPPINGS" | "FAMILY_SETTINGS" | "ACCOUNT_ACCESS";
 
 export const PHYSICAL: Record<LogicalTable, string> = {
   TRANSACTIONS: "transactions",
@@ -52,13 +52,15 @@ export const PHYSICAL: Record<LogicalTable, string> = {
   BUDGETS: "budgets",
   IMPORT_MAPPINGS: "import_mappings",
   FAMILY_SETTINGS: "family_settings",
+  ACCOUNT_ACCESS: "account_access",
 };
 
 // Server-managed / client-derived keys: silently removed from any inbound row.
 // family_id & user_id are server-derived (never trusted); updated_at is trigger-managed;
 // isDirty is a client-only transient flag that is never persisted.
 export const STRIPPED_KEYS = new Set<string>([
-  "family_id", "user_id", "updated_at", "isDirty", "is_dirty",
+  "family_id", "user_id", "updated_at", "created_by", "granted_by_member_id", "granted_at",
+  "scope_version", "plan_type", "isDirty", "is_dirty",
 ]);
 
 const GLOBAL_WRITABLE = ["id", "deleted", "is_immutable"];
@@ -113,7 +115,7 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
   // stopped_at are GONE (migration 0017 drops the columns).
   BUDGETS: new Set([
     ...GLOBAL_WRITABLE,
-    "period_type", "kind", "enc",
+    "period_type", "kind", "line_id", "account_ids", "ignored_category_ids", "category_ids", "enc",
   ]),
   // IMPORT_MAPPINGS is a PURE enc table - the only one. A bank's column names describe the account,
   // so the header, the normalised key and the verdict are all user data and none of them has a
@@ -142,6 +144,9 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
   // and a server-side setter writes real values when feature controls land.
   FAMILY_SETTINGS: new Set([
     ...GLOBAL_WRITABLE, "family_name", "family_photo", "date_format",
+  ]),
+  ACCOUNT_ACCESS: new Set([
+    ...GLOBAL_WRITABLE, "account_id", "member_id",
   ]),
 };
 

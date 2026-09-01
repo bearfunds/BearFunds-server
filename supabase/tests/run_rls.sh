@@ -12,7 +12,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 SUITE="supabase/tests/rls_isolation.test.sql"
+ACCESS_SUITE="supabase/tests/account_access_rls.test.sql"
 [ -f "$SUITE" ] || { echo "ERROR: $SUITE not found."; exit 1; }
+[ -f "$ACCESS_SUITE" ] || { echo "ERROR: $ACCESS_SUITE not found."; exit 1; }
 
 command -v supabase >/dev/null || { echo "ERROR: Supabase CLI not found."; exit 1; }
 
@@ -24,11 +26,13 @@ DB_URL="$(printf '%s\n' "$STATUS_ENV" | sed -n 's/^DB_URL="\(.*\)"$/\1/p')"
 if command -v psql >/dev/null; then
   echo "==> Running RLS suite via local psql..."
   psql "$DB_URL" -v ON_ERROR_STOP=1 -q -f "$SUITE"
+  psql "$DB_URL" -v ON_ERROR_STOP=1 -q -f "$ACCESS_SUITE"
 else
   echo "==> No local psql; running RLS suite via the db container..."
   CONTAINER="$(docker ps --filter "name=supabase_db" --format '{{.Names}}' | head -n 1)"
   : "${CONTAINER:?could not find a supabase_db container}"
   docker exec -i "$CONTAINER" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q < "$SUITE"
+  docker exec -i "$CONTAINER" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q < "$ACCESS_SUITE"
 fi
 
 echo "==> RLS isolation suite PASSED."

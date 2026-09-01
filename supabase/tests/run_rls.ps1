@@ -10,7 +10,9 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = (Resolve-Path "$PSScriptRoot/../..").Path
 Set-Location $RepoRoot
 $Suite = "supabase/tests/rls_isolation.test.sql"
+$AccessSuite = "supabase/tests/account_access_rls.test.sql"
 if (-not (Test-Path $Suite)) { Write-Error "Suite not found: $Suite" }
+if (-not (Test-Path $AccessSuite)) { Write-Error "Suite not found: $AccessSuite" }
 
 foreach ($tool in 'supabase','docker') {
   if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
@@ -33,11 +35,13 @@ $DbUrl = $m.Matches[0].Groups[1].Value
 if (Get-Command psql -ErrorAction SilentlyContinue) {
   Write-Host "==> Running RLS suite via local psql..."
   psql $DbUrl -v ON_ERROR_STOP=1 -q -f $Suite
+  psql $DbUrl -v ON_ERROR_STOP=1 -q -f $AccessSuite
 } else {
   Write-Host "==> No local psql; running RLS suite via the db container..."
   $Container = (docker ps --filter "name=supabase_db" --format "{{.Names}}" | Select-Object -First 1)
   if (-not $Container) { Write-Error "Could not find a supabase_db container." }
   Get-Content $Suite | docker exec -i $Container psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q
+  Get-Content $AccessSuite | docker exec -i $Container psql -U postgres -d postgres -v ON_ERROR_STOP=1 -q
 }
 
 if ($LASTEXITCODE -ne 0) { Write-Error "RLS isolation suite FAILED (psql exit $LASTEXITCODE)." }
