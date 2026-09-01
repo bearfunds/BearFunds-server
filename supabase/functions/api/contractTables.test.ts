@@ -82,3 +82,63 @@ Deno.test("CONTROL: the membership predicate rejects a table nobody declared", (
   assert(!isLogicalTable("DROP TABLE"), "nor is arbitrary text");
   assert(isLogicalTable("IMPORT_MAPPINGS"), "and the real one IS - so this check can fail");
 });
+
+// A column the contract declares as client-writable, which is ABSENT from the allowlist.
+//
+// THE BUG THIS EXISTS FOR, and it is the one the header above says this file does NOT cover. On
+// 2026-08-19 `role` was removed from the MEMBERS allowlist as a second lock behind migration 0021's
+// trigger. sanitizeRow THROWS on a key it does not accept, so every members batchUpsert failed with
+// "Unknown key 'role'" and the client's whole sync died at that batch - seven ghost scenarios red
+// for a reason none of them was about.
+//
+// THE DIRECTION IS THE WHOLE POINT, and the obvious one is useless here. Asserting "every writable
+// key is declared" would NOT have caught it: removing a key leaves every remaining key declared.
+// The direction that catches it is the inverse - every DECLARED client-writable column must be
+// ACCEPTED - because that is what the client is entitled to send.
+//
+// This closes the cross-repo property transitively rather than by reaching across repos: the client
+// holds its emitted keys against the contract (tests/adapterContract), this holds the allowlist
+// against the same contract, and the contract is the only artifact both repos share. Neither guard
+// can see the other's repo, and neither needs to.
+const SERVER_OWNED = /read-only|stripped on writes|SERVER-DERIVED|server-derived|Auto-managed|server-managed/i;
+
+Deno.test("every client-writable column the contract declares is ACCEPTED by the seam", async () => {
+  const xml = await Deno.readTextFile(CONTRACT);
+  const tables = [...xml.matchAll(/<Table name="([A-Z_]+)"[\s\S]*?<\/Table>/g)];
+
+  // CONTROL FIRST: an empty parse would make every assertion below pass by having no subjects.
+  assert(tables.length >= 8, `the table parse found real blocks (got ${tables.length})`);
+
+  const missing: string[] = [];
+  let checked = 0;
+  for (const t of tables) {
+    const name = t[1];
+    if (name === "FAMILIES") continue; // the tenancy root; see declaredTables above
+    const set = WRITABLE[name as keyof typeof WRITABLE];
+    if (!set) continue; // absence is the other test's finding, not this one's
+    for (const c of t[0].matchAll(/<(?:Column key|Field name)="([a-z_]+)"([\s\S]*?)\/>/g)) {
+      const [, key, attrs] = c;
+      if (SERVER_OWNED.test(attrs)) continue; // the server owns it; the client may not write it
+      checked++;
+      if (!set.has(key)) missing.push(`${name}.${key}`);
+    }
+  }
+
+  assert(checked > 20, `CONTROL: real columns were examined (got ${checked})`);
+  assertEquals(
+    missing,
+    [],
+    `contract columns the seam would REJECT: ${missing.join(", ")}. sanitizeRow throws on an ` +
+    `unaccepted key, so one of these fails the WHOLE batch and takes the client's sync with it.`,
+  );
+});
+
+Deno.test("CONTROL: the acceptance check catches a key removed from an allowlist", () => {
+  // Runs the real predicate against a SYNTHETIC allowlist rather than the live one, so it proves
+  // the check can fail whatever the tree currently says. Reading the live tree for a counter-example
+  // is how a liveness control ends up passing for the wrong reason.
+  const declared = ["id", "name", "role", "avatar"];
+  const accepted = new Set(["id", "name", "avatar"]); // `role` removed, as on 2026-08-19
+  const missing = declared.filter((k) => !accepted.has(k));
+  assertEquals(missing, ["role"], "the predicate names the removed key");
+});

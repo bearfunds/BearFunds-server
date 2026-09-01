@@ -369,8 +369,10 @@ end $t$;
 -- its own RLS test (server convention; risk map S3).
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
 -- Alice creates a monthly Budget. family_id omitted -> server-derived.
-insert into public.budgets (id, period_type, kind, enc)
-  values ('b_a1', 'monthly', 'instance', 'v1.aXY=.Zm9v');
+-- account_ids is REQUIRED since 0023 (the check that makes an account-less Budget an
+-- impossible state rather than an unenforced one). Every insert below carries it.
+insert into public.budgets (id, period_type, kind, enc, account_ids)
+  values ('b_a1', 'monthly', 'instance', 'v1.aXY=.Zm9v', array['w_a1']);
 do $t$ begin
   assert (select family_id from public.budgets where id = 'b_a1') = (select family_id from fam where who = 'A'),
          'new budget must be scoped to Alice family';
@@ -389,8 +391,8 @@ do $t$ begin
   assert not exists (select 1 from public.budgets where id = 'b_a1'), 'Alice budget stays invisible to Bob';
 end $t$;
 -- A forged family_id must be overwritten to the CALLER's family, not honoured.
-insert into public.budgets (id, period_type, kind, enc, family_id)
-  values ('b_b_forge', 'monthly', 'instance', 'v1.aXY=.Zm9v', (select family_id from fam where who = 'A'));
+insert into public.budgets (id, period_type, kind, enc, account_ids, family_id)
+  values ('b_b_forge', 'monthly', 'instance', 'v1.aXY=.Zm9v', array['w_b1'], (select family_id from fam where who = 'A'));
 do $t$ begin
   assert (select family_id from public.budgets where id = 'b_b_forge') = (select family_id from fam where who = 'B'),
          'forged family_id must be overwritten to Bob family';
@@ -406,12 +408,12 @@ end $t$;
 -- Budgets with fixed ids, and a global id PK would collide -> RLS-denied upsert -> 500 (the 0009
 -- bug). The property is cheap to keep and expensive to rediscover.
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
-insert into public.budgets (id, period_type, kind, enc)
-  values ('b001', 'monthly', 'instance', 'v1.alice.enc');
+insert into public.budgets (id, period_type, kind, enc, account_ids)
+  values ('b001', 'monthly', 'instance', 'v1.alice.enc', array['w_a1']);
 reset role; reset request.jwt.claims;
 set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
-insert into public.budgets (id, period_type, kind, enc)
-  values ('b001', 'monthly', 'instance', 'v1.bob.enc');
+insert into public.budgets (id, period_type, kind, enc, account_ids)
+  values ('b001', 'monthly', 'instance', 'v1.bob.enc', array['w_b1']);
 reset role; reset request.jwt.claims;
 do $t$ begin
   assert (select count(*) from public.budgets where id = 'b001') = 2, 'both families hold a b001 row';
@@ -781,6 +783,502 @@ do $t$ begin
   assert (select role from public.members where user_id = '00000000-0000-0000-0000-00000000000c') = 'member',
          'and join_family still seeds an invited member at the invite role';
 end $t$;
+
+-- ============ Per-member account visibility (0023) ============
+-- The first predicate in this schema narrower than a family. Every assertion below is
+-- about what a NON-ADMIN member of Alice's family can see; Carol is that member (she
+-- joined via join_family above and the role-escalation section left her at 'member').
+--
+-- WHAT WOULD HAVE PASSED BEFORE 0023: the very first assert. Carol saw every account in
+-- her family, because `family_id = auth_family_id()` was the narrowest unit that existed.
+-- That assert is therefore the fails-before control for this whole section, and it needs
+-- no synthetic fixture - the tree itself was the counter-example until this migration.
+
+create temporary table vis as
+  select (select family_id from fam where who = 'A')                                          as fam_a,
+         (select id from public.members where user_id = '00000000-0000-0000-0000-00000000000c') as carol_member,
+         (select id from public.members where user_id = '00000000-0000-0000-0000-00000000000a') as alice_member;
+grant select on vis to authenticated;
+
+do $t$ begin
+  assert (select carol_member from vis) is not null, 'FIXTURE: Carol must hold a member row in Alice family';
+  assert (select role from public.members where user_id = '00000000-0000-0000-0000-00000000000c') = 'member',
+         'FIXTURE: Carol must be a plain member, or every assertion below tests the admin arm';
+end $t$;
+
+-- Alice (admin) builds the fixture: two accounts, three transactions, two budgets.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+insert into public.accounts (id, currency, enc) values
+  ('w_shared',  'EUR', 'v1.iv_sh.ct_shared'),
+  ('w_private', 'EUR', 'v1.iv_pr.ct_private');
+insert into public.transactions (id, date, currency, type, account_id, enc) values
+  ('t_shared',  '2026-08-01', 'EUR', 'expense', 'w_shared',  'v1.iv_t1.ct1'),
+  ('t_private', '2026-08-01', 'EUR', 'expense', 'w_private', 'v1.iv_t2.ct2'),
+  ('t_noacct',  '2026-08-01', 'EUR', 'expense', null,        'v1.iv_t3.ct3');
+insert into public.staged_transactions (id, batch_id, date, currency, type, account_id, status, enc) values
+  ('s_shared',  'batch1', '2026-08-01', 'EUR', 'expense', 'w_shared',  'staged', 'v1.iv_s1.cs1');
+insert into public.budgets (id, period_type, kind, enc, account_ids) values
+  ('b_shared', 'monthly', 'instance', 'v1.iv_b1.cb1', array['w_shared']),
+  ('b_mixed',  'monthly', 'instance', 'v1.iv_b2.cb2', array['w_shared','w_private']);
+
+-- ADMIN ARM: the predicate must not simply hide everything from everybody. An admin sees
+-- the whole family, and this is the control that tells a working narrow policy apart from
+-- one that is broken in the fail-closed direction (which looks identical from the member).
+do $t$ begin
+  assert (select count(*) from public.accounts where id in ('w_shared','w_private')) = 2,
+         'CONTROL: an admin still sees every account in her family';
+  assert (select count(*) from public.transactions where id in ('t_shared','t_private','t_noacct')) = 3,
+         'CONTROL: an admin still sees every transaction, including one with a null account_id';
+  assert (select count(*) from public.budgets where id in ('b_shared','b_mixed')) = 2,
+         'CONTROL: an admin still sees every budget';
+  assert public.is_family_admin(), 'CONTROL: is_family_admin() is true for the founding admin';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- ============ Carol, ungranted: DEFAULT HIDDEN ============
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000c"}';
+do $t$ begin
+  assert not public.is_family_admin(), 'Carol is not an admin';
+  -- THE FAILS-BEFORE ASSERT. Green only because 0023 exists.
+  assert (select count(*) from public.accounts) = 0,
+         'an ungranted member sees NO accounts (default hidden, fail closed)';
+  assert (select count(*) from public.transactions) = 0,
+         'and therefore no transactions, including the null-account row';
+  assert (select count(*) from public.staged_transactions) = 0, 'and no staged rows';
+  assert (select count(*) from public.budgets) = 0, 'and no budgets';
+  assert public.visible_account_ids() = '{}'::text[], 'visible_account_ids is empty for an ungranted member';
+end $t$;
+
+-- The grant ledger is not readable by the member it describes: knowing an account EXISTS
+-- is the information this feature withholds, so a count would defeat it.
+do $t$ begin
+  assert (select count(*) from public.account_access) = 0, 'a member cannot read the grant ledger';
+end $t$;
+
+-- A MEMBER CANNOT GRANT HERSELF ANYTHING, AND SINCE 0026 THE WRITE POLICY IS WHAT SAYS SO.
+-- Authoring moved onto the sync plane, so there is no admin-gated function left to refuse the
+-- call: the refusal is the policy WITH CHECK, and a member INSERT raises 42501 exactly as an
+-- invisible row upsert does. Written in the shape the client push actually emits, per the
+-- lesson at (d) below - a bare insert would prove a permissiveness the app can never reach.
+do $t$
+declare raised boolean := false;
+begin
+  begin
+    insert into public.account_access (id, account_id, member_id)
+      values ('w_private__' || (select carol_member from vis), 'w_private', (select carol_member from vis))
+      on conflict (family_id, id) do update set deleted = false;
+  exception when others then
+    raised := true;
+  end;
+  assert raised, 'a member writing her own grant row must be refused';
+  assert (select count(*) from public.accounts) = 0, 'and the refusal changed nothing';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- ============ Alice grants ONE account, as an ordinary synced row (0026) ============
+-- THE ID IS DETERMINISTIC: '<account_id>__<member_id>'. Two admins granting the same pair while
+-- offline therefore mint the SAME row rather than two, so the pair converges under last-write-wins
+-- instead of duplicating. import_mappings refused a deterministic id (0018) because a digest of a
+-- low-entropy header would publish the shape of a family bank file; nothing is disclosed here,
+-- because both halves of this id are already plaintext columns on the row it names.
+--
+-- THE EXISTENCE CHECKS ARE GONE AND THAT IS DELIBERATE. The RPC refused a grant naming an account
+-- this family does not hold. On the sync plane a refusal is a 42501 that takes the whole
+-- batchUpsert with it - the 2026-08-19 shape this repo has paid for twice - so a dangling grant is
+-- written and is INERT instead: family_id is server-derived, so the row can only ever name an id
+-- inside the caller own family, and an id no account there carries resolves to nothing. The client
+-- reconciles orphans out of what it renders (accessModel.visibleGrantedAccountIds). The tenancy
+-- property the check used to carry is asserted directly in the cross-family section below.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+insert into public.account_access (id, account_id, member_id, granted_by_member_id)
+  values ('w_shared__' || (select carol_member from vis), 'w_shared', (select carol_member from vis), 'm_forged');
+do $t$ begin
+  assert (select count(*) from public.account_access) = 1, 'the admin can read the grant she just made';
+  assert (select granted_by_member_id from public.account_access) = (select alice_member from vis),
+         'granted_by is server-derived from the caller, and a SUPPLIED value is overwritten rather than honoured';
+  assert (select deleted from public.account_access) = false, 'and a new grant is live';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- ============ Carol, granted: EXACTLY the granted account ============
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000c"}';
+do $t$ begin
+  assert (select count(*) from public.accounts) = 1, 'a granted member sees exactly one account';
+  assert (select id from public.accounts) = 'w_shared', 'and it is the granted one';
+
+  -- DERIVED: visibility follows account_id, with no per-transaction state anywhere.
+  assert (select count(*) from public.transactions) = 1, 'she sees only the granted account transaction';
+  assert (select id from public.transactions) = 't_shared', 'and it is the right one';
+  assert not exists (select 1 from public.transactions where id = 't_noacct'),
+         'a NULL account_id row stays hidden from a member - it cannot be attributed to an account';
+  assert (select count(*) from public.staged_transactions) = 1, 'staged rows derive identically';
+
+  -- CONTAINMENT, not intersection: the mixed budget spans a hidden account, so it is hidden
+  -- entirely. A partial total would leak the hidden account and be quietly wrong.
+  assert (select count(*) from public.budgets) = 1, 'she sees only the single-account budget';
+  assert (select id from public.budgets) = 'b_shared', 'and the mixed budget is hidden entirely';
+end $t$;
+
+-- D4, AS MEASURED RATHER THAN AS INTENDED. The plan was to leave writes at family scope so
+-- a member could still push a row she may no longer read - the point being that a refused
+-- row takes the whole batch with it (2026-08-19). Postgres does not allow the separation:
+-- a narrowed USING gates UPDATE and DELETE too, and ON CONFLICT DO UPDATE must read the
+-- conflicting row. Both halves are asserted here so the next person does not re-derive it.
+--
+-- (a) a plain UPDATE ... WHERE on an invisible row matches nothing, SILENTLY.
+update public.transactions set status = 'cleared' where id = 't_private';
+do $t$ begin
+  assert not exists (select 1 from public.transactions where id = 't_private'),
+         'the private row is invisible to Carol, so her UPDATE had nothing to match';
+end $t$;
+
+-- (b) an UPSERT of an invisible row RAISES - this is the sync-killing rejection, and it is
+--     live until the delivery slice either filters the outbox or makes the seam tolerate a
+--     per-row refusal. Asserted so that a future mitigation has something to turn green.
+do $t$
+declare raised boolean := false;
+begin
+  begin
+    insert into public.transactions (id, date, currency, type, account_id, enc)
+      values ('t_private', '2026-08-09', 'EUR', 'expense', 'w_private', 'v1.iv_t2.EDITED')
+      on conflict (family_id, id) do update set enc = excluded.enc;
+  exception when others then raised := true;
+  end;
+  assert raised, 'upserting an invisible row is REFUSED (known: one such row kills the batch)';
+end $t$;
+
+-- (c) CONTROL: the same upsert on a VISIBLE row succeeds. Without this the assert above
+--     passes for the wrong reason - it would be satisfied by a policy that refuses every
+--     write from a member, which is a different and much worse bug.
+insert into public.transactions (id, date, currency, type, account_id, enc)
+  values ('t_shared', '2026-08-09', 'EUR', 'expense', 'w_shared', 'v1.iv_t1.EDITED')
+  on conflict (family_id, id) do update set enc = excluded.enc;
+do $t$ begin
+  assert (select enc from public.transactions where id = 't_shared') = 'v1.iv_t1.EDITED',
+         'CONTROL: a member CAN still write a row she can see';
+end $t$;
+
+-- (d) CREATION IN THE CLIENT'S OWN SHAPE. supabase-js `upsert(rows).select()` emits
+--     INSERT ... ON CONFLICT ... RETURNING, and RETURNING RE-READS the row under the SELECT
+--     policy - so this is the assertion that decides whether a member can use the app at all.
+--     Under 0023 alone it was REFUSED (42501, row not written); 0024's created_by is what
+--     makes it pass, because a row's own column is the only thing a STABLE predicate can see
+--     inside the same statement. Asserted in the client's shape rather than the convenient
+--     one: an earlier version used a bare insert and "proved" a permissiveness the app can
+--     never reach.
+do $t$
+declare n int;
+begin
+  with ins as (
+    insert into public.accounts (id, currency, enc) values ('w_carol', 'EUR', 'v1.iv_cw.ct_carol')
+    on conflict (family_id, id) do update set enc = excluded.enc
+    returning *
+  ) select count(*) into n from ins;
+  assert n = 1, 'the CLIENT-SHAPED create returns the row it wrote';
+  assert (select count(*) from public.accounts where id = 'w_carol') = 1,
+         'and the member can read back the account she just created';
+end $t$;
+
+-- (e) THE NEGATIVE CONTROL FOR (d), and it is the one that matters. The creator arm is an OR
+--     into a fail-closed predicate, so the question is not whether it lets her see her own
+--     row - it is whether it let anything else through with it.
+do $t$ begin
+  assert not exists (select 1 from public.accounts where id = 'w_private'),
+         'CONTROL: creating her own account did NOT reveal the admin private account';
+  assert (select count(*) from public.accounts) = 2,
+         'CONTROL: she sees exactly the granted account and the one she created, nothing more';
+end $t$;
+
+-- (f) created_by IS SERVER-DERIVED. A supplied value must be overwritten, not honoured - an
+--     earlier draft of the trigger used coalesce() and THIS control caught it: a forged value
+--     survived, which would have let a member hand visibility of a new row to someone else.
+insert into public.accounts (id, currency, enc, created_by)
+  values ('w_forge', 'EUR', 'v1.iv_fg.ct_forge', 'm_someone_else');
+reset role; reset request.jwt.claims;
+do $t$ begin
+  assert (select created_by from public.accounts where id = 'w_forge') <> 'm_someone_else',
+         'a client-supplied created_by must be overwritten by the session value';
+  assert (select created_by from public.accounts where id = 'w_forge')
+       = (select carol_member from vis),
+         'and it must be the CALLER, derived from the session like family_id';
+end $t$;
+
+-- (g) WRITE-ONCE, ENFORCED BY PRESERVING RATHER THAN RAISING. A raise would turn one row into
+--     a failed batch and take the sync with it, which is the failure shape this repo has paid
+--     for twice. The old value is silently restored instead.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+update public.accounts set created_by = 'm_hijack' where id = 'w_forge';
+reset role; reset request.jwt.claims;
+do $t$ begin
+  assert (select created_by from public.accounts where id = 'w_forge') = (select carol_member from vis),
+         'created_by survives an update attempt unchanged, and the update itself did not error';
+end $t$;
+
+-- (h) A NULL-ACCOUNT ROW IS VISIBLE TO ITS AUTHOR AND TO NOBODY ELSE. This is the staged-import
+--     case: a row before classification names no account, so it can be attributed to none, and
+--     under 0023 alone it was hidden from the member who created it.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000c"}';
+insert into public.transactions (id, date, currency, type, account_id, enc)
+  values ('t_carol_noacct', '2026-08-10', 'EUR', 'expense', null, 'v1.iv_cn.ct_cn');
+insert into public.staged_transactions (id, batch_id, date, currency, type, account_id, status, enc)
+  values ('s_carol_noacct', 'batch2', '2026-08-10', 'EUR', 'expense', null, 'staged', 'v1.iv_sn.ct_sn');
+do $t$ begin
+  assert exists (select 1 from public.transactions where id = 't_carol_noacct'),
+         'a member sees her own unclassified transaction';
+  assert exists (select 1 from public.staged_transactions where id = 's_carol_noacct'),
+         'and her own staged import row';
+  assert not exists (select 1 from public.transactions where id = 't_noacct'),
+         'CONTROL: but NOT the admin unclassified row - the arm is authorship, not null-ness';
+end $t$;
+
+-- ============ Revocation is a TOMBSTONE, and evicts nothing ============
+-- A MEMBER CANNOT REVOKE HER OWN GRANT EITHER, AND THIS ARM FAILS DIFFERENTLY FROM THE INSERT
+-- ONE. The policy USING clause is admin-only, so the row is invisible to her and the UPDATE
+-- matches nothing - SILENTLY, the same shape as (a) above. Both halves are asserted because a
+-- policy narrowed on only one of them would leave the other open and nothing would say so.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000c"}';
+update public.account_access set deleted = true where account_id = 'w_shared';
+reset role; reset request.jwt.claims;
+do $t$ begin
+  assert (select deleted from public.account_access where account_id = 'w_shared') = false,
+         'a member UPDATE on the grant ledger matched nothing - her own grant is still live';
+end $t$;
+
+-- THE REVOKE ITSELF. A hard delete leaves no tombstone and a delta read cannot express a row that
+-- is simply gone, so the admin device would never learn the grant had been withdrawn. Soft delete
+-- is what makes revocation deliverable on the sync plane at all.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+update public.account_access set deleted = true
+  where id = 'w_shared__' || (select carol_member from vis);
+do $t$ begin
+  assert (select count(*) from public.account_access where not deleted) = 0, 'the grant is gone';
+  assert (select count(*) from public.account_access) = 1,
+         'but the ROW survives as a tombstone - which is the only way the withdrawal reaches another device';
+end $t$;
+-- Idempotent: re-writing the same tombstone is the same end state, and a UI that double-fires
+-- must not error. The scope_version section below asserts it does not BUMP either.
+update public.account_access set deleted = true
+  where id = 'w_shared__' || (select carol_member from vis);
+reset role; reset request.jwt.claims;
+
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000c"}';
+-- REVOCATION TAKES THE GRANT AND LEAVES WHAT SHE CREATED. That asymmetry is the point rather
+-- than a side effect: "rows the member created stay available" is what makes the eventual lock
+-- proportionate instead of punitive, and it falls out of created_by for free.
+do $t$ begin
+  assert not exists (select 1 from public.accounts where id = 'w_shared'),
+         'after revocation the granted account is no longer sent';
+  assert not exists (select 1 from public.transactions where id = 't_shared'),
+         'and its derived transactions go with it';
+  assert exists (select 1 from public.accounts where id = 'w_carol'),
+         'but the account she created herself stays - revocation is not confiscation';
+  assert exists (select 1 from public.transactions where id = 't_carol_noacct'),
+         'as does her own unclassified row';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- ============ scope_version: the only channel a scope change has (0025) ============
+-- A delta read can deliver neither a widened nor a narrowed scope, so the server counts the
+-- changes on the member's own row and the client answers a bump by clearing and re-pulling.
+-- The asserts below are about the SERVER half: that the counter moves exactly when scope moves.
+do $t$ begin
+  assert (select scope_version from public.members where id = (select carol_member from vis)) = 2,
+         'the grant and the revoke above bumped Carol scope_version exactly twice';
+  assert (select scope_version from public.members where user_id = '00000000-0000-0000-0000-00000000000a') = 0,
+         'and nobody else moved - a bump is per MEMBER, not per family';
+end $t$;
+
+-- IDEMPOTENT WRITES MUST NOT BUMP, and this is load-bearing rather than tidy: the client answers
+-- a bump by DELETING local rows, so a re-grant of what is already granted would cost a member a
+-- clear-and-refetch for no reason.
+--
+-- THE DISCRIMINATOR CHANGED WITH THE MECHANISM, AND THAT IS THE WHOLE RISK OF 0026. The RPC could
+-- ask FOUND, because `on conflict do nothing` and `delete` each either touched a row or did not. A
+-- trigger has no FOUND: it fires on every INSERT and every UPDATE, including the ordinary
+-- ON CONFLICT DO UPDATE the client emits on EVERY push for a row that has not changed. So the
+-- discrimination moved into the trigger WHEN clause - a live INSERT, or an UPDATE in which
+-- `deleted` actually transitions. Without it every routine re-push would evict the member.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+do $t$
+declare before_v integer;
+declare grant_id text := 'w_shared__' || (select carol_member from vis);
+begin
+  select scope_version into before_v from public.members where id = (select carol_member from vis);
+
+  update public.account_access set deleted = true where id = grant_id;
+  assert (select scope_version from public.members where id = (select carol_member from vis)) = before_v,
+         'revoking what is already revoked changes nothing and must NOT bump';
+
+  update public.account_access set deleted = false where id = grant_id;
+  assert (select scope_version from public.members where id = (select carol_member from vis)) = before_v + 1,
+         'CONTROL: a real re-grant DOES bump - so the assert above is not passing because bumps never happen';
+
+  update public.account_access set deleted = false where id = grant_id;
+  assert (select scope_version from public.members where id = (select carol_member from vis)) = before_v + 1,
+         'and re-granting what is already granted must NOT bump';
+
+  -- THE ONE THE RPC NEVER HAD TO SURVIVE. Every push re-sends the whole outbox row, so an
+  -- unchanged grant arrives as an upsert over and over. This is the client push shape verbatim.
+  insert into public.account_access (id, account_id, member_id)
+    values (grant_id, 'w_shared', (select carol_member from vis))
+    on conflict (family_id, id) do update set account_id = excluded.account_id, deleted = excluded.deleted;
+  assert (select scope_version from public.members where id = (select carol_member from vis)) = before_v + 1,
+         'an idempotent re-UPSERT of an unchanged grant must NOT bump - a routine push must not evict anybody';
+
+  -- A grant that arrives ALREADY tombstoned is a member who never had it: nothing to withdraw,
+  -- nothing to deliver. An INSERT arm that bumped unconditionally would evict on this row.
+  insert into public.account_access (id, account_id, member_id, deleted)
+    values ('w_private__' || (select carol_member from vis), 'w_private', (select carol_member from vis), true);
+  assert (select scope_version from public.members where id = (select carol_member from vis)) = before_v + 1,
+         'and an INSERT of an already-tombstoned grant must NOT bump either';
+end $t$;
+
+reset role; reset request.jwt.claims;
+
+-- The bump must REACH her, which means riding updated_at like any other change. Without that the
+-- counter is correct and undeliverable, which is exactly the failure it exists to fix.
+--
+-- ASSERTED BY BACKDATING RATHER THAN BY COMPARING TWO READINGS. This suite runs inside ONE
+-- transaction and set_updated_at stamps now(), which is transaction-constant - so "read the
+-- stamp, act, read it again" compares a value to itself and fails against a working trigger.
+-- Backdating the row first gives the trigger something to visibly move.
+--
+-- THE BACKDATE HAS TO DISABLE members_set_updated_at, AND WITHOUT THAT THIS WHOLE BLOCK WAS A
+-- CHECK THAT COULD NOT FAIL (found 2026-08-25 while rewriting the section for 0026). That trigger
+-- is `before insert or update` and assigns `new.updated_at := now()` UNCONDITIONALLY, so the
+-- backdate below was overwritten by the very statement that wrote it. Both asserts then held
+-- whatever the grant plane did - including if it did nothing at all - because now() is
+-- transaction-constant and the row already carried it. The disable is what gives the assert
+-- something it can be wrong about; the CONTROL after it proves the backdate actually landed.
+alter table public.members disable trigger members_set_updated_at;
+update public.members set updated_at = '2000-01-01T00:00:00Z'
+  where id = (select carol_member from vis);
+alter table public.members enable trigger members_set_updated_at;
+do $t$ begin
+  assert (select updated_at from public.members where id = (select carol_member from vis))
+         = '2000-01-01T00:00:00Z'::timestamptz,
+         'CONTROL: the backdate took - otherwise the two asserts below cannot fail';
+end $t$;
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+update public.account_access set deleted = true
+  where id = 'w_shared__' || (select carol_member from vis);
+reset role; reset request.jwt.claims;
+do $t$ begin
+  assert (select updated_at from public.members where id = (select carol_member from vis))
+         > '2000-01-01T00:00:00Z'::timestamptz,
+         'a bump moves updated_at, so the row enters the member next delta pull';
+  assert (select updated_at from public.members where id = (select carol_member from vis)) = now(),
+         'CONTROL: it was the set_updated_at trigger that moved it, not the backdate lingering';
+end $t$;
+
+-- ============ import_mappings is ADMIN-ONLY (was a navigation gate only) ============
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+insert into public.import_mappings (id, enc) values ('im_vis1', 'v1.iv_im.ct_im');
+do $t$ begin
+  assert (select count(*) from public.import_mappings where id = 'im_vis1') = 1, 'an admin reads import mappings';
+end $t$;
+reset role; reset request.jwt.claims;
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000c"}';
+do $t$ begin
+  assert (select count(*) from public.import_mappings) = 0, 'a member reads none';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- ============ Cross-family: the grant plane respects tenancy (0026) ============
+-- THE RPC USED TO REFUSE THIS AND NOW THERE IS NOTHING TO REFUSE, WHICH IS A STRONGER PROPERTY
+-- RATHER THAN A WEAKER ONE. family_id is derived by the same set_family_id trigger every tenant
+-- table has used since 0001, so a row Bob writes naming an account id out of Alice family lands in
+-- BOB family and grants nothing to anybody. Tenancy is a property of the write path here, not a
+-- check inside a function that a second writer could bypass - and there is no second writer now.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000b"}';
+insert into public.account_access (id, account_id, member_id, family_id)
+  values ('w_shared__cross', 'w_shared', (select carol_member from vis), (select fam_a from vis));
+reset role; reset request.jwt.claims;
+do $t$ begin
+  assert (select family_id from public.account_access where id = 'w_shared__cross')
+       = (select family_id from fam where who = 'B'),
+         'Bob grant landed in HIS family, and a SUPPLIED family_id was overwritten rather than honoured';
+  assert (select count(*) from public.account_access
+           where family_id = (select fam_a from vis) and not deleted) = 0,
+         'and Alice family ledger is untouched - every grant in it is a tombstone by now';
+end $t$;
+
+-- AND IT CONFERRED NOTHING, which is the assert that matters: the row exists, names a real account
+-- id, and is inert because the id belongs to a family the row is not in.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000c"}';
+do $t$ begin
+  assert not exists (select 1 from public.accounts where id = 'w_shared'),
+         'Carol still cannot see w_shared - a grant row in another family reaches her not at all';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- ============ D5: an account-less budget is an impossible state ============
+-- The client already refuses to save one; this is the schema agreeing with the form. It
+-- matters because '{}' <@ anything is TRUE, so an empty array would be visible to EVERY
+-- member, vacuously - fail-closed defeated at exactly the point it is load-bearing.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+do $t$
+declare raised boolean := false;
+begin
+  begin
+    insert into public.budgets (id, period_type, kind, enc, account_ids)
+      values ('b_empty', 'monthly', 'instance', 'v1.iv_be.cbe', '{}'::text[]);
+  exception when check_violation then raised := true;
+  end;
+  assert raised, 'a budget with no accounts must be refused by the schema';
+end $t$;
+-- And the default is gone, so omitting the column is loud rather than quietly empty.
+do $t$
+declare raised boolean := false;
+begin
+  begin
+    insert into public.budgets (id, period_type, kind, enc)
+      values ('b_default', 'monthly', 'instance', 'v1.iv_bd.cbd');
+  exception when not_null_violation then raised := true;
+  end;
+  assert raised, 'omitting account_ids must fail rather than default to the vacuous empty array';
+end $t$;
+reset role; reset request.jwt.claims;
+
+-- ============ The TEST-FAMILY arm: without it the ghost suite sees nothing ============
+-- ensure_test_family() provisions a families row and a user_test_family mapping and NO
+-- members row, and user_id is stripped from every client write - so inside a test family
+-- auth.uid() resolves to no member and to no role. A fail-closed predicate reading only
+-- `members` would show 199 ghost scenarios zero of everything. The caller owning the test
+-- family IS its administrator; there is nobody else in it.
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+set request.headers = '{"x-bf-test":"1"}';
+do $t$
+declare tf uuid;
+begin
+  tf := public.ensure_test_family();
+  assert tf is not null, 'FIXTURE: a test family was provisioned';
+  assert public.auth_family_id() = tf, 'tenancy resolves to the test family';
+  assert not exists (select 1 from public.members m where m.family_id = tf and m.user_id is not null),
+         'MEASURED: the test family holds no user-linked member row - this is why the arm exists';
+  assert public.auth_member_id() is null, 'auth_member_id is null in a test family, by construction';
+  assert public.is_family_admin(), 'and the caller is nonetheless its admin, or every ghost sees nothing';
+end $t$;
+-- The arm must not leak the other way: a test-context caller is an admin of the TEST family
+-- and must still see nothing of their real one.
+insert into public.accounts (id, currency, enc) values ('w_test1', 'EUR', 'v1.iv_tt.ct_test');
+do $t$ begin
+  assert (select count(*) from public.accounts) = 1, 'the test family sees only its own account';
+  assert (select id from public.accounts) = 'w_test1', 'and the real family stays out of the test context';
+end $t$;
+reset role; reset request.jwt.claims; reset request.headers;
+
+-- CONTROL: the header is what switched context, not the uid. Same caller, no header, and the
+-- test row is invisible again - otherwise the assertion above passes for the wrong reason.
+set role authenticated; set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-00000000000a"}';
+do $t$ begin
+  assert not exists (select 1 from public.accounts where id = 'w_test1'),
+         'CONTROL: without the test header the caller is back in her real family';
+  assert (select count(*) from public.accounts where id in ('w_shared','w_private')) = 2,
+         'CONTROL: and sees her real accounts again';
+end $t$;
+reset role; reset request.jwt.claims;
 
 rollback;
 \echo '================================'

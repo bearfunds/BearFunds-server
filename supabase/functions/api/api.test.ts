@@ -44,17 +44,26 @@ Deno.test("RLE: plaintext sensitive keys are rejected per table", () => {
     ["STAGED_TRANSACTIONS", { id: "st1", amount: "-1,5" }],
     ["STAGED_TRANSACTIONS", { id: "st1", source_row: "{}" }],
     ["STAGED_TRANSACTIONS", { id: "st1", source_name: "x" }],
-    // BUDGETS (v1.17): the WHOLE plan rides enc - name, target, Areas, category + account
-    // membership, the period bounds AND the recurring line id. The only writable plaintext left is
-    // kind + period_type.
+    // BUDGETS (v1.26): the PAYLOAD rides enc - name, amount, target, note and the period bounds.
+    // The four IDS do not: line_id, account_ids, ignored_category_ids and category_ids are plaintext
+    // columns, because a server cannot scope what it cannot read and a Budget's visibility resolves
+    // from the accounts it aggregates. They are therefore absent from this list by contract.
+    //
+    // `areas` STAYS SEALED AND THAT IS THE WHOLE DISTINCTION. category_ids is a FLATTENED UNION of
+    // every Area's categories - a projection, not a move out of the envelope - so the server learns
+    // WHICH categories a Budget watches and never HOW THEY ARE GROUPED. The grouping is the plan,
+    // and the plan stays sealed (migration 0022).
+    //
+    // THE ACCEPTANCE HALF IS WITNESSED ELSEWHERE, so do not re-add the four ids here inverted into
+    // accept-assertions: contractTables.test.ts holds "every client-writable column the contract
+    // declares is ACCEPTED by the seam", with its subject list DERIVED from the contract XML. A
+    // hand-typed copy here would be a second, hand-maintained version of a property already derived
+    // from the one artifact both repos share.
     ["BUDGETS", { id: "b1", name: "Groceries" }],
     ["BUDGETS", { id: "b1", amount: 400 }],
     ["BUDGETS", { id: "b1", target: 2000 }],
     ["BUDGETS", { id: "b1", note: "new coffee machine" }],
-    ["BUDGETS", { id: "b1", category_ids: "[\"c1\"]" }],
-    ["BUDGETS", { id: "b1", account_ids: "[\"w1\"]" }],
     ["BUDGETS", { id: "b1", areas: "[]" }],
-    ["BUDGETS", { id: "b1", line_id: "line_1" }],
     // The v1 plaintext columns. These are the keys a STALE DEPLOYED CLIENT would send, and the
     // rejection is exactly what makes that failure loud instead of silent - which is why the
     // server and client ship in one coordinated deploy.
@@ -98,6 +107,90 @@ Deno.test("rejects unknown row key (strict contract)", () => {
     () => parseRequest({ action: "batchCreate", table: "ACCOUNTS", rows: [{ id: "w1", bogus: 1 }] }),
     ValidationError, "Unknown key 'bogus'",
   );
+});
+
+// MEMBERS ACCEPTS `role`, AND THE SEAM IS NOT WHERE A PROMOTION IS REFUSED.
+//
+// `role` was removed from WRITABLE.MEMBERS on 2026-08-19 alongside migration 0021, which was one
+// defence too many: sanitizeRow THROWS on a key that is not writable, so every members batchUpsert
+// began failing with "Unknown key 'role' for table MEMBERS" and the client's whole sync died at
+// that batch. Seven ghost scenarios went red for a reason none of them was about. The two halves of
+// that commit also contradicted each other in writing - 0021's own comment says "The client sends
+// `role` on every member update, so this branch is the common case rather than an edge", which is
+// only true if the key reaches the trigger.
+//
+// THE ENFORCEMENT IS THE TRIGGER, NOT THE ALLOWLIST. `members_role_change_guard` (0021) compares
+// old.role to new.role and raises 'admin role required to change a member role' for a non-admin
+// caller, which is a refusal the client can SEE - a stripped key is silently dropped and a rejected
+// batch takes the whole sync with it. The RLS suite demonstrates both arms against real Postgres.
+// This test pins the seam open so a future tidy-up cannot close it again without going red here.
+Deno.test("MEMBERS: role is writable - the role-change guard (0021) is the refusal, not the seam", () => {
+  const req = parseRequest({
+    action: "batchUpsert", table: "MEMBERS",
+    rows: [{ id: "m1", name: "Art", role: "admin", avatar: "/a.png", color: "#3b82f6", family_id: "forged", updated_at: "2000" }],
+  });
+  if (req.action !== "batchUpsert") throw new Error("wrong action");
+  assertEquals(req.rows[0], { id: "m1", name: "Art", role: "admin", avatar: "/a.png", color: "#3b82f6" });
+});
+
+// PLAN_TYPE IS DROPPED, NOT REJECTED, AND THE DIFFERENCE IS THE WHOLE FEATURE.
+//
+// The client sends plan_type on every family_settings push and is expected to keep doing so: the
+// client half of this property is pinned by the client's own tests/planAuthority, which says in
+// writing that "the client may ASK, and the server dropping the key is the refusal. Removing the
+// send would be a different design and should be a decision rather than a tidy-up."
+//
+// So the server owes a DROP. It was not dropping: plan_type was neither writable nor stripped, so
+// sanitizeRow threw and the family_settings batch would have failed exactly as MEMBERS did, one
+// batch later in the same sync. The FAMILY_SETTINGS comment in contract.ts already described the
+// drop as the mechanism; the code now does what that comment says.
+//
+// A dropped key is silent BY DESIGN here and loud for role, which is the asymmetry worth keeping:
+// nothing the client says about its own plan is believed, and there is no client surface that could
+// act on a refusal it received. A server-side setter writes real values when feature controls land.
+Deno.test("FAMILY_SETTINGS: plan_type is stripped, not rejected - the client may ask and is not answered", () => {
+  const req = parseRequest({
+    action: "batchUpsert", table: "FAMILY_SETTINGS",
+    rows: [{ id: "family-settings", family_name: "Bear", family_photo: "/f.png", date_format: "dayFirst", plan_type: "Enterprise" }],
+  });
+  if (req.action !== "batchUpsert") throw new Error("wrong action");
+  assertEquals(req.rows[0], { id: "family-settings", family_name: "Bear", family_photo: "/f.png", date_format: "dayFirst" });
+  assert(!("plan_type" in req.rows[0]), "a forged plan must not reach the row the server writes");
+});
+
+// created_by (migration 0024) names WHO created a row, and the visibility predicate READS it -
+// a member sees back what she created, which is what lets INSERT ... RETURNING succeed under a
+// fail-closed read policy. So a client value for it would be a claim about identity that buys
+// visibility, and it is stripped exactly like user_id. Stripped rather than non-writable for the
+// same reason as plan_type: a non-writable key makes sanitizeRow THROW and takes the batch with
+// it, where a strip drops and the BEFORE INSERT trigger repopulates from the session.
+Deno.test("created_by is stripped on every table that carries it - it is a session fact, not a client one", () => {
+  for (const table of ["ACCOUNTS", "TRANSACTIONS", "STAGED_TRANSACTIONS"] as const) {
+    const req = parseRequest({
+      action: "batchUpsert", table,
+      rows: [{ id: "r1", enc: "v1.iv.ct", created_by: "m_someone_else" }],
+    });
+    if (req.action !== "batchUpsert") throw new Error("wrong action");
+    assert(!("created_by" in req.rows[0]), `${table}: a forged created_by must not reach the row`);
+    assertEquals(req.rows[0].id, "r1", `${table}: the rest of the row survives the strip`);
+    assertEquals(req.rows[0].enc, "v1.iv.ct", `${table}: the envelope survives the strip`);
+  }
+});
+
+// CONTROL: the strip is a DROP, not a rejection. A key the contract does not know at all still
+// throws - which is the property that tells "silently ignored" apart from "quietly accepted",
+// and the reason the assertion above is meaningful rather than vacuous.
+Deno.test("CONTROL: an unknown key still throws, so the strip above is a drop and not a shrug", () => {
+  let threw = false;
+  try {
+    parseRequest({
+      action: "batchUpsert", table: "ACCOUNTS",
+      rows: [{ id: "r1", enc: "v1.iv.ct", not_a_real_column: "x" }],
+    });
+  } catch {
+    threw = true;
+  }
+  assert(threw, "an undeclared key must still be refused");
 });
 
 Deno.test("SUBCATEGORIES: strips server keys, keeps writable (category_id,name,is_default)", () => {

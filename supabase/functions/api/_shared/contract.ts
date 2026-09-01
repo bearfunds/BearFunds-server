@@ -37,9 +37,28 @@
 // photo is one of four bundled asset paths; plan_type MUST stay readable because feature controls
 // and analytics will gate on it; and a date format is not PII. Categories, subcategories and members
 // are plaintext by the same test, so this is the house rule rather than an exception.
+// v1.26 (BREAKING + DESTRUCTIVE): budget ids leave the envelope. line_id, account_ids and
+// ignored_category_ids become plaintext columns, and category_ids joins them as a FLATTENED UNION
+// of every Area's categories - a projection of the envelope rather than a move out of it, so the
+// server learns which categories a Budget watches and never how they are grouped. A server cannot
+// scope what it cannot read, and BUDGETS was the only table whose foreign keys were sealed while
+// TRANSACTIONS has carried account_id in plaintext since v1.23. area_id is NOT promoted: it exists
+// only inside adjustments, beside an amount. Period bounds, targets, names, notes and Area amounts
+// stay sealed - this reopens the LINE-ID half of v1.17 and not the bounds half. Rows are WIPED by
+// migration 0022 (pre-alpha; every existing Budget is test data).
+// v1.28 (ADDITIVE): ACCOUNT_ACCESS - the per-member account grant ledger, which becomes a synced
+// collection. It had no contract surface at all until now, and that was a decision rather than an
+// omission: migration 0023 D2 kept grants on an RPC control plane because a synced grant row merges
+// last-write-wins, so a revocation can lose a race to a stale device re-pushing an older grant.
+// That objection is unchanged and is ACCEPTED rather than solved (operator, 2026-08-24) - this
+// model is a trust boundary and not a security one, LWW is how every other row here behaves, and
+// co-equal admins are out of scope for the alpha. What it buys is that sharing stops being the one
+// admin action in the app requiring connectivity at the instant of Save. Migration 0026 moves the
+// enforcement onto the write path: admin-only on BOTH sides of one policy, granted_by server-
+// derived by trigger, and the scope_version bump WHEN-guarded so a routine re-push cannot evict.
 export type LogicalTable =
   | "TRANSACTIONS" | "CATEGORIES" | "SUBCATEGORIES" | "ACCOUNTS" | "ENTITIES" | "MEMBERS" | "STAGED_TRANSACTIONS"
-  | "BUDGETS" | "IMPORT_MAPPINGS" | "FAMILY_SETTINGS";
+  | "BUDGETS" | "IMPORT_MAPPINGS" | "FAMILY_SETTINGS" | "ACCOUNT_ACCESS";
 
 export const PHYSICAL: Record<LogicalTable, string> = {
   TRANSACTIONS: "transactions",
@@ -52,13 +71,60 @@ export const PHYSICAL: Record<LogicalTable, string> = {
   BUDGETS: "budgets",
   IMPORT_MAPPINGS: "import_mappings",
   FAMILY_SETTINGS: "family_settings",
+  ACCOUNT_ACCESS: "account_access",
 };
 
 // Server-managed / client-derived keys: silently removed from any inbound row.
 // family_id & user_id are server-derived (never trusted); updated_at is trigger-managed;
 // isDirty is a client-only transient flag that is never persisted.
+//
+// WHAT A STRIP DOES TO THE STORED VALUE, MEASURED RATHER THAN ASSUMED (2026-08-20). A stripped key
+// is a column ABSENT from the row handed to .upsert(), so this whole mechanism rests on what
+// PostgREST does with an absent column on the ON CONFLICT update path: it leaves it alone. Measured
+// against the local stack - plan_type was set to a probe value directly in the database, a family
+// rename was synced, and the probe value survived a push whose row demonstrably carried the new
+// name. Had it default-filled instead, a strip would be a silent DELETE of whatever the server had
+// stored, which is the exact opposite of the protection it resembles: family_settings would lose
+// its plan on every push, and members.user_id would be nulled on every members batch.
+//
+// THE TRIGGERS ARE NOT WHAT MAKES THIS SAFE, though they look like it. family_id and updated_at are
+// repopulated by the per-table triggers generated in 0002 and would survive either way; plan_type
+// and user_id have no such trigger and survive purely on the retention property above. If a future
+// column must be both stripped AND guaranteed, a trigger is the mechanism that guarantees it -
+// this list is not.
+//
+// `plan_type` IS STRIPPED RATHER THAN REJECTED, and the two are not interchangeable. The client
+// sends it on every family_settings push and is EXPECTED to keep doing so - the client's
+// tests/planAuthority pins the send in place, on the grounds that the client may ask and the server
+// dropping the key is the refusal. It was neither writable nor stripped between 2026-08-19 and this
+// commit, which meant sanitizeRow threw and the family_settings batch would have failed exactly as
+// MEMBERS did, one batch later in the same sync. The FAMILY_SETTINGS entry below already described
+// the drop as the mechanism; this is the line that makes that description true.
+//
+// The key is stripped GLOBALLY because no other table declares a plan_type column, so a per-table
+// strip would be machinery with one member. If a second table ever carries one, this becomes a
+// per-table decision rather than a shared word.
+// `created_by` (migration 0024) is STRIPPED for the same reason `user_id` is: it names WHO,
+// it is derived from the session by a trigger, and a client value for it would be a claim
+// about identity. It is stripped rather than made non-writable ON PURPOSE - a non-writable
+// key makes sanitizeRow THROW and one such key killed every collection's sync on 2026-08-19,
+// whereas a strip drops silently and the trigger repopulates. The read path is unaffected:
+// the column comes back on pulled rows and the client simply has no adapter for it.
+// `scope_version` (migration 0025, contract v1.27) is the server's statement of how many times
+// what a member may RECEIVE has changed. The client reads it and answers a bump by clearing its
+// scoped local stores and re-pulling; a client value for it would be a claim about its own
+// permissions, and a false one would either suppress a needed re-pull or force a needless
+// delete. Stripped rather than non-writable for the reason the two entries above share.
+// `granted_by_member_id` (migration 0026, contract v1.28) is the third key stripped for the reason
+// `user_id` and `created_by` are: it names WHO, it is derived from the session by a trigger, and a
+// client value for it would be a claim about identity - here, a claim about who authorised a
+// permission, which is the one field on that row worth forging. Stripped rather than made
+// non-writable for the reason the whole group shares: a non-writable key makes sanitizeRow THROW
+// and one such key killed every collection's sync on 2026-08-19, whereas a strip drops silently and
+// the trigger repopulates. The read path is unaffected - it comes back on pulled rows.
 export const STRIPPED_KEYS = new Set<string>([
-  "family_id", "user_id", "updated_at", "isDirty", "is_dirty",
+  "family_id", "user_id", "updated_at", "isDirty", "is_dirty", "plan_type", "created_by",
+  "scope_version", "granted_by_member_id",
 ]);
 
 const GLOBAL_WRITABLE = ["id", "deleted", "is_immutable"];
@@ -82,18 +148,31 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
     ...GLOBAL_WRITABLE,
     "default_category_id", "default_sub_category_id", "icon", "color", "enc",
   ]),
-  // `role` IS NOT WRITABLE, and its absence is the point. It sat here until 2026-08-19, which meant
-  // a member could issue batchUpdate on their own row with role 'admin' and be promoted: RLS on
-  // members is family-tenancy only, no policy mentions role, and there was no trigger. Demonstrated
-  // against the RLS suite before the fix - the update simply succeeded.
+  // `role` IS WRITABLE, AND THE PROMOTION IS REFUSED ONE LAYER DOWN. A member issuing batchUpdate
+  // on their own row with role 'admin' is rejected by `members_role_change_guard` (migration 0021),
+  // which compares old.role to new.role and raises 'admin role required to change a member role'
+  // unless the caller is an admin of that family. RLS cannot express this - `with check` sees only
+  // the NEW row and the question is old-versus-new - so the trigger is the enforcement and this
+  // allowlist is not. Both arms are demonstrated against real Postgres in the RLS suite.
   //
-  // EVERY LEGITIMATE ASSIGNMENT IS ALREADY SERVER-SIDE, which is why removing it costs nothing: the
-  // founding admin comes from the sign-up trigger, an invited member's role from the invite row
-  // (both admin-gated in 0007), and the client writes role in exactly one place, hardcoded 'member'.
-  // The column's `default 'member'` preserves creation exactly. Migration 0021 is the loud half - a
-  // stripped key is silently dropped, so a future promote/demote UI needs a refusal it can see.
+  // IT IS WRITABLE BECAUSE REMOVING IT WAS ONE DEFENCE TOO MANY. `role` was taken out of this set on
+  // 2026-08-19 beside 0021; sanitizeRow THROWS on a non-writable key, so every members batchUpsert
+  // began failing with "Unknown key 'role'" and the client's entire sync died at that batch - seven
+  // ghost scenarios red for a reason none of them was about. 0021's own comment states the shape it
+  // was written for: "The client sends `role` on every member update, so this branch is the common
+  // case rather than an edge." That is only true if the key gets through.
+  //
+  // A REFUSAL THE CLIENT CAN SEE IS THE POINT. A stripped key vanishes silently and a rejected batch
+  // takes the sync with it; a trigger exception is neither. A promote/demote UI needs exactly that,
+  // and it is now the only thing standing between a client and a role change.
+  //
+  // WHAT THIS DOES NOT DEFEND, because a reader will otherwise assume it does: nothing here protects
+  // a client from its OWN local store. mergePulledCollection is last-write-wins on updated_at, and
+  // there is no server-authority override for role the way there is for plan_type, so a tampered
+  // IndexedDB row keeps a forged 'admin' locally through every pull. That is a client-side hole and
+  // an RLS role predicate is what closes it - filed against L2 in the brain, not solved here.
   MEMBERS: new Set([
-    ...GLOBAL_WRITABLE, "name", "avatar", "color",
+    ...GLOBAL_WRITABLE, "name", "avatar", "color", "role",
   ]),
   STAGED_TRANSACTIONS: new Set([
     ...GLOBAL_WRITABLE,
@@ -111,9 +190,14 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
   // `period_type` is a coarse cadence. Neither is sensitive, neither is computed over server-side,
   // and both exist for debuggability. currency / template_id / period_start / period_end /
   // stopped_at are GONE (migration 0017 drops the columns).
+  // v1.26: the four id columns are CLIENT-WRITABLE, unlike FAMILY_SETTINGS.plan_type. Nothing here
+  // is a claim the server needs to own - an id names a row the client already holds, and the server
+  // reads them only to answer "may this member see this Budget". A stripped or refused id would
+  // make the Budget invisible to the predicate that exists to scope it.
   BUDGETS: new Set([
     ...GLOBAL_WRITABLE,
     "period_type", "kind", "enc",
+    "line_id", "account_ids", "ignored_category_ids", "category_ids",
   ]),
   // IMPORT_MAPPINGS is a PURE enc table - the only one. A bank's column names describe the account,
   // so the header, the normalised key and the verdict are all user data and none of them has a
@@ -142,6 +226,21 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
   // and a server-side setter writes real values when feature controls land.
   FAMILY_SETTINGS: new Set([
     ...GLOBAL_WRITABLE, "family_name", "family_photo", "date_format",
+  ]),
+  // ACCOUNT_ACCESS carries exactly two keys of its own, and BOTH are plaintext by necessity rather
+  // than by the house rule: the server resolves visibility from them, and a server cannot scope
+  // what it cannot read. That is the same argument v1.26 made when the budget ids left the
+  // envelope, applied to the table those ids are scoped against.
+  //
+  // `deleted` IS THE REVOCATION, not housekeeping. It arrives through GLOBAL_WRITABLE like every
+  // other tombstone, and on this table it is the only mechanism a withdrawal has: a hard delete
+  // leaves nothing for a delta read to carry, so a second admin device would never learn of it.
+  //
+  // `granted_by_member_id` is absent here ON PURPOSE - it is server-derived and sits in
+  // STRIPPED_KEYS above. The contract declares it as stripped on writes, so the client's
+  // tests/adapterContract ARM 2 fails by name if an adapter ever starts sending it.
+  ACCOUNT_ACCESS: new Set([
+    ...GLOBAL_WRITABLE, "account_id", "member_id",
   ]),
 };
 
