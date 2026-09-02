@@ -84,18 +84,20 @@ export const WRITABLE: Record<LogicalTable, Set<string>> = {
     ...GLOBAL_WRITABLE,
     "default_category_id", "default_sub_category_id", "icon", "color", "enc",
   ]),
-  // `role` IS NOT WRITABLE, and its absence is the point. It sat here until 2026-08-19, which meant
-  // a member could issue batchUpdate on their own row with role 'admin' and be promoted: RLS on
-  // members is family-tenancy only, no policy mentions role, and there was no trigger. Demonstrated
-  // against the RLS suite before the fix - the update simply succeeded.
+  // `role` IS WRITABLE, AND THE REFUSAL LIVES IN THE DATABASE. It was pulled from this set on
+  // 2026-08-19 to close a self-promotion hole - a member could batchUpdate their own row with role
+  // 'admin' and be promoted, because RLS on members is family-tenancy only and no policy mentions
+  // role. Migration 0021 closed that hole properly with the members_role_change_guard trigger, and
+  // the allowlist was never put back. That cost the whole feature: the client sends `role` on EVERY
+  // member update, an unknown key fails the entire batch, and member sync stopped dead in prod.
   //
-  // EVERY LEGITIMATE ASSIGNMENT IS ALREADY SERVER-SIDE, which is why removing it costs nothing: the
-  // founding admin comes from the sign-up trigger, an invited member's role from the invite row
-  // (both admin-gated in 0007), and the client writes role in exactly one place, hardcoded 'member'.
-  // The column's `default 'member'` preserves creation exactly. Migration 0021 is the loud half - a
-  // stripped key is silently dropped, so a future promote/demote UI needs a refusal it can see.
+  // WHICH LAYER REFUSES IS THE WHOLE POINT, and contract v1.25 settles it. A stripped key is
+  // silently dropped and a promote/demote UI would show success for nothing; a rejected key takes
+  // the sync with it, as it did here; a trigger exception is a refusal the client can SEE. So an
+  // unchanged role passes (the trigger returns early when old and new match, which is the common
+  // case), and a genuine change by a non-admin raises 'admin role required to change a member role'.
   MEMBERS: new Set([
-    ...GLOBAL_WRITABLE, "name", "avatar", "color",
+    ...GLOBAL_WRITABLE, "name", "role", "avatar", "color",
   ]),
   STAGED_TRANSACTIONS: new Set([
     ...GLOBAL_WRITABLE,

@@ -301,3 +301,34 @@ Deno.test("v1.25-v1.28: accepts promoted budget fields and account access while 
   await runAction(parseRequest({ action: "read", table: "ACCOUNT_ACCESS" }), db, { isTest: false });
   assertEquals(calls[0].table, "account_access");
 });
+
+// REGRESSION. `role` was dropped from the MEMBERS allowlist on 2026-08-19 to close the
+// self-promotion hole, and migration 0021 closed it properly with a trigger. The allowlist was
+// never put back, so from that day every member edit failed: the client sends `role` on EVERY
+// member update, an unknown key fails the whole batch, and member sync stopped dead in prod.
+// Contract v1.25 settles which layer refuses - "`role` on MEMBERS ... remains writable - a role
+// CHANGE is refused by the members_role_change_guard trigger (migration 0021), not by the wire
+// allowlist, because a trigger exception is a refusal the client can see". A stripped key is
+// silent; a rejected key takes the sync with it; a trigger exception is the only one a
+// promote/demote UI can show. The guard's own coverage is in tests/rls_isolation.test.sql.
+Deno.test("v1.25: MEMBERS accepts role on the wire (the DB trigger is what refuses a change)", () => {
+  const req = parseRequest({
+    action: "batchUpdate", table: "MEMBERS",
+    updates: [{
+      id: "m1", name: "Joao", role: "admin", avatar: "/avatars/members/member-07.png",
+      color: "user-deep-4", deleted: false, is_immutable: false,
+      updated_at: "2026-09-01T16:48:57.118Z", family_id: "forged",
+    }],
+  });
+  if (req.action !== "batchUpdate") throw new Error("wrong action");
+  assertEquals(req.updates[0], {
+    id: "m1", name: "Joao", role: "admin", avatar: "/avatars/members/member-07.png",
+    color: "user-deep-4", deleted: false, is_immutable: false,
+  });
+
+  // The control: widening the allowlist by one key must not have widened it by two.
+  assertThrows(
+    () => parseRequest({ action: "batchUpdate", table: "MEMBERS", updates: [{ id: "m1", bogus: 1 }] }),
+    ValidationError, "Unknown key 'bogus'",
+  );
+});
