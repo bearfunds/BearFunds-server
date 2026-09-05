@@ -1,6 +1,6 @@
 # blast-radius extension: BearFunds server
 
-_Repo-local extension of the `blast-radius` skill (`second-brain-skills` plugin). **The skill is canonical for the discipline**; this file answers the questions it declines to answer here, and carries the hazards true only of this repo._
+_Repo-local extension of the `blast-radius` skill. **The skill is canonical for the discipline**; this file answers the questions it declines to answer here, and carries the hazards true only of this repo._
 
 ---
 

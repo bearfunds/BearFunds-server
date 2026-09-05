@@ -1,6 +1,6 @@
 # commit-handoff extension: BearFunds server
 
-_Repo-local extension of the `commit-handoff` skill (`second-brain-skills` plugin). **The skill is canonical for the discipline**; this file answers the questions it declines to answer here._
+_Repo-local extension of the `commit-handoff` skill. **The skill is canonical for the discipline**; this file answers the questions it declines to answer here._
 
 ---
 

@@ -1,6 +1,6 @@
 # contract-dropin extension: BearFunds server
 
-_Repo-local extension of the `contract-dropin` skill (`code-skills` plugin). **The skill is canonical for the discipline**; this file answers the questions it declines to answer here._
+_Repo-local extension of the `contract-dropin` skill. **The skill is canonical for the discipline**; this file answers the questions it declines to answer here._
 
 **This file states what IS.**
 

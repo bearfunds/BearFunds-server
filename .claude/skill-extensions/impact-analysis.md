@@ -1,6 +1,6 @@
 # impact-analysis extension: BearFunds server
 
-_Repo-local extension of the `impact-analysis` skill (`code-skills` plugin). **`0_AI_INSTRUCTIONS.md` is the protocol and outranks both**; the skill is the discipline for executing it; this file carries what is true only of this repo._
+_Repo-local extension of the `impact-analysis` skill. **`0_AI_INSTRUCTIONS.md` is the protocol and outranks both**; the skill is the discipline for executing it; this file carries what is true only of this repo._
 
 ---
 
