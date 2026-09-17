@@ -23,7 +23,7 @@ This is the **server** of BearFunds ("Sweet Savings For Families") — the backe
 
 ## Relationship to the brain (decisions live there, not here)
 
-The design this repo implements is the brain's `Areas/BearFunds/Reference/BearFunds Server Architecture.md`, alongside the schema contract, data model and persistence docs, plus `Sources of Truth.md` for the governance. This repo owns the runtime and the canonical Schema Contract; the why lives in the brain. Registers are one file per entry, cited by prefixed code (`BF-Q`, `BF-C`, `BF-B`, `BF-H`).
+The design this repo implements is the brain's `Wiki/Systems/BearFunds/BearFunds Server Architecture.md`, alongside the schema contract, data model and persistence docs in that same folder - **it was `Areas/BearFunds/Reference/` until 2026-09-10 and that folder is gone.** The governance is the `## Source of record` section of `Areas/BearFunds/Areas BearFunds.md`. This repo owns the runtime and the canonical Schema Contract; the why lives in the brain. Registers are one file per entry, cited by prefixed code (`BF-Q`, `BF-C`, `BF-B`, `BF-D`, `BF-H`).
 
 **Environment and write-path rules are canonical in the brain's `.claude/rules/`** - the write-path matrix, the absolute rule against a scripted read-modify-write, the edit-anchor hazard, the stale-mount and git hazards and the no-`npm install`-on-a-mount rule are in `tool-reliability.md`; strict ASCII is in `writing-a-page.md`; the machine detection and branch rules are in `operator-environment.md`. Read them before writing here. _(This line named the brain's `CLAUDE.md` under "Tool reliability" until 2026-09-06, when the rules-split moved them out from under it.)_
 
